@@ -1,0 +1,85 @@
+name: MAISB Quick CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  sanity:
+    name: Sanity & Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: maisb/runner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runner and dependencies
+        run: pip install -e ".[test]" || pip install -e . && pip install pytest pyyaml matplotlib numpy
+
+      - name: Validate pack v3 YAML schema
+        run: |
+          python - <<'EOF'
+          import sys
+          sys.path.insert(0, '.')
+          from maisb_runner.pack_loader import load_pack
+          pack = load_pack("v3")
+          scenarios = pack["scenarios"]
+          assert len(scenarios) >= 240, f"Expected >=240 scenarios, got {len(scenarios)}"
+          attack = sum(1 for s in scenarios if s.get("metadata", {}).get("kind") == "attack")
+          benign = sum(1 for s in scenarios if s.get("metadata", {}).get("kind") == "benign")
+          assert attack >= 160, f"Expected >=160 attack, got {attack}"
+          assert benign >= 80, f"Expected >=80 benign, got {benign}"
+          print(f"Pack v3 validated: {len(scenarios)} scenarios ({attack} attack, {benign} benign)")
+          EOF
+
+      - name: Compute pack hash
+        run: |
+          python - <<'EOF'
+          import sys
+          sys.path.insert(0, '.')
+          from maisb_runner.pack_loader import load_pack
+          pack = load_pack("v3")
+          print(f"Pack hash: {pack['pack_hash']}")
+          assert len(pack['pack_hash']) == 64, "Hash should be 64-char SHA-256 hex"
+          EOF
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Generate charts on synthetic report
+        run: |
+          python - <<'EOF'
+          import sys, tempfile, os
+          sys.path.insert(0, '.')
+          from maisb_runner.charts import generate_charts
+
+          report = {
+              "runner_version": "0.3.0",
+              "metrics": {
+                  "total": 10, "attack_count": 6, "benign_count": 4,
+                  "true_positives": 5, "false_negatives": 1,
+                  "true_negatives": 3, "false_positives": 1,
+                  "attack_detection_rate": 0.833, "false_positive_rate": 0.25, "accuracy": 0.8,
+              },
+              "channel_breakdown": {
+                  "clipboard": {"attack_detection_rate": 0.9, "false_positive_rate": 0.1, "accuracy": 0.85, "total": 5},
+              },
+              "results": [
+                  {"decision": "BLOCKED_BEFORE_LLM", "decision_code": 0},
+                  {"decision": "ALLOWED_BENIGN", "decision_code": 4},
+              ],
+          }
+          with tempfile.TemporaryDirectory() as d:
+              created = generate_charts(report, output_dir=d)
+              print(f"Charts created: {len(created)}")
+          print("Chart generation OK")
+          EOF
