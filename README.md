@@ -6,6 +6,9 @@ It consists of:
 - **Android harness** (`maisb/harness/android/`) – a Kotlin/Ktor app that runs on an Android emulator and exposes a local HTTP server.
 - **Scenario packs** (`maisb/packs/`) – YAML scenario files (v1 and v3).
 - **Python runner** (`maisb/runner/`) – CLI tool that drives the harness, scores results, and produces JSON reports and charts.
+- **Dashboard backend** (`maisb/dashboard/backend/`) – FastAPI server that reads evaluation reports and exposes them as a REST API (port 8000, `/docs` for Swagger UI).
+- **Dashboard frontend** (`maisb/dashboard/frontend/`) – Vite + React SPA that visualises metrics and channel-breakdown tables (port 5173).
+- **Docker Compose** (`maisb/docker-compose.yml`) – one-command startup for the dashboard (backend + frontend).
 - **Helper scripts** (`maisb/scripts/`) – Windows `.bat` wrappers and a PowerShell setup checker.
 
 ---
@@ -119,6 +122,52 @@ run_sweep.bat
 cd maisb/runner
 maisb sweep --pack v3 --defense-profiles D0,D1,D2,D3,D4 --repeats 1 \
     --output report_sweep.json --charts-dir charts_sweep
+```
+
+---
+
+## Dashboard (Docker Compose)
+
+After you have run at least one evaluation (so report files exist in `maisb/runner/`),
+start the full dashboard stack with a single command:
+
+```bash
+cd maisb
+docker compose up --build
+```
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Backend API | <http://localhost:8000/docs> | Swagger UI / REST API |
+| Frontend dashboard | <http://localhost:5173> | React metrics dashboard |
+
+The backend reads all `report_*.json` files from `maisb/runner/` (mounted read-only).
+The frontend fetches from the backend and displays:
+
+- Overall metrics cards (attack detection rate, false positive rate, accuracy)
+- Per-scenario counts (TP / FP / FN)
+- Per-channel breakdown table
+
+To stop the stack:
+
+```bash
+docker compose down
+```
+
+### Running the frontend in development mode (no Docker)
+
+```bash
+cd maisb/dashboard/frontend
+npm install
+npm run dev          # http://localhost:5173
+```
+
+Make sure the backend is also running:
+
+```bash
+cd maisb/dashboard/backend
+pip install -r requirements.txt
+uvicorn main:app --reload   # http://localhost:8000
 ```
 
 ---

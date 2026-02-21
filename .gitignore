@@ -3,3 +3,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 *.egg-info/
+
+# Dashboard frontend build artifacts and dependencies
+maisb/dashboard/frontend/node_modules/
+maisb/dashboard/frontend/dist/

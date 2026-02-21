@@ -1,0 +1,40 @@
+# MAISB v0.3 – Docker Compose
+#
+# Starts the dashboard backend (FastAPI, port 8000) and frontend (nginx, port 5173).
+# The backend reads evaluation reports written by the maisb runner into ./runner/.
+#
+# Prerequisites:
+#   1. Install Docker Desktop (https://docker.com/products/docker-desktop)
+#   2. Run at least one evaluation first so reports exist:
+#        cd runner && pip install -e . && maisb quick
+#   3. From this directory (maisb/) run:
+#        docker compose up --build
+#
+# Access:
+#   API docs:  http://localhost:8000/docs
+#   Dashboard: http://localhost:5173
+
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./dashboard/backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the runner output directory (read-only) so the backend can serve reports.
+      - ./runner:/app/reports:ro
+    environment:
+      - REPORTS_DIR=/app/reports
+      - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./dashboard/frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
