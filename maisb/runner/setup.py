@@ -10,6 +10,9 @@ setup(
         "click>=8.1.0",
         "matplotlib>=3.6.0",
         "numpy>=1.24.0",
+        "fastapi>=0.100.0",
+        "uvicorn>=0.22.0",
+        "pydantic>=2.0.0",
     ],
     entry_points={
         "console_scripts": [
