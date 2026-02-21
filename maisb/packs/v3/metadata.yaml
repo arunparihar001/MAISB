@@ -1,0 +1,11 @@
+name: maisb-pack-v3
+version: "3.0"
+total_scenarios: 240
+channels:
+  - clipboard
+  - deeplink
+  - share
+  - qr
+  - webview
+generation_note: "Synthetic/mock scenarios for MAISB v0.3 evaluation. All payloads are safe and synthetic."
+created_at: "2026-02-21T00:00:00Z"
