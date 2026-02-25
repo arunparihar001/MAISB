@@ -27,3 +27,4 @@ class WebViewActivity : Activity() {
         webView.loadDataWithBaseURL("https://safe.example.com", html, "text/html", "UTF-8", null)
     }
 }
+
