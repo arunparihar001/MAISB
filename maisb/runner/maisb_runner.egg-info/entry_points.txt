@@ -1,0 +1,2 @@
+[console_scripts]
+maisb = maisb_runner.cli:main
