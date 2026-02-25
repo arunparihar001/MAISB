@@ -16,3 +16,4 @@ data class ChannelState(
     @Volatile var lastNotificationText: String = "",
     @Volatile var lastWebViewHtml: String = "",
 )
+
