@@ -87,3 +87,4 @@ def metrics_summary() -> Dict[str, List[Dict[str, Any]]]:
             logger.warning("Failed to load report %s: %s", path.name, exc)
             continue
     return {"summaries": summaries}
+
