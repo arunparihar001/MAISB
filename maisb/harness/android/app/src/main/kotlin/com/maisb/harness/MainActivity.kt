@@ -7,11 +7,11 @@ import android.widget.TextView
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         val tv = TextView(this)
         tv.text = "MAISB Harness v0.3 - Server running on port 8765"
         setContentView(tv)
 
-        // Start harness server in background thread
         Thread {
             HarnessServer(filesDir).start()
         }.start()
