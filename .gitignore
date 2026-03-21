@@ -1,3 +1,4 @@
+
 __pycache__/
 *.pyc
 *.pyo
@@ -7,3 +8,37 @@ __pycache__/
 # Dashboard frontend build artifacts and dependencies
 maisb/dashboard/frontend/node_modules/
 maisb/dashboard/frontend/dist/
+
+# Run results and generated charts (ignore generated outputs, keep source code)
+# JSON reports that start with "report"
+report*.json
+**/report*.json
+**/report_*.json
+
+# Runner reports and charts
+/maisb/runner/*.json
+/maisb/runner/reports/
+maisb/runner/charts*/
+maisb/runner/charts_*/
+**/reports/
+**/charts*/
+**/charts_*/
+
+# Top-level charts directories
+charts*/
+charts_*/
+
+# Android build artifacts and APKs
+/maisb/harness/android/app/build/
+**/build/
+**/.gradle/
+**/app/build/**
+*.apk
+
+# Short-lived device/run outputs
+adb_*.txt
+adb_devices_now.txt
+apk_info_now.txt
+
+# Editor
+.vscode/
