@@ -16,6 +16,16 @@ from pydantic import BaseModel
 # Import the classify function that already exists in main.py
 from main import classify_payload
 
+# Auto-create DB on first run (needed for Railway / cloud deployments)
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("CREATE TABLE IF NOT EXISTS api_keys (key TEXT PRIMARY KEY, plan TEXT, created TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS scans (api_key TEXT, ts TEXT, channel TEXT, decision TEXT)")
+    conn.execute("INSERT OR IGNORE INTO api_keys VALUES ('maisb_live_test123', 'free', '2026-04-20')")
+    conn.commit()
+    conn.close()
+
+init_db()  # runs every startup, safe to call multiple times
 app = FastAPI(title="MAISB Scan API", version="1.0.0")
 
 DB_PATH = "usage.db"
