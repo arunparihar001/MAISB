@@ -1,0 +1,8 @@
+setup.py
+maisb_shield/__init__.py
+maisb_shield/shield.py
+maisb_shield.egg-info/PKG-INFO
+maisb_shield.egg-info/SOURCES.txt
+maisb_shield.egg-info/dependency_links.txt
+maisb_shield.egg-info/requires.txt
+maisb_shield.egg-info/top_level.txt

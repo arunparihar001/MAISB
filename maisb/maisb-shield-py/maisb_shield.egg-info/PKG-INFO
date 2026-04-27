@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: maisb-shield
+Version: 1.0.0
+Summary: MAISB Shield SDK — prompt injection protection for mobile AI agents
+Home-page: https://github.com/your-org/maisb-benchmark
+Author: MAISB
+Author-email: your@email.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Topic :: Security
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.28.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
