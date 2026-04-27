@@ -1,0 +1,24 @@
+{
+  "name": "maisb-shield",
+  "version": "1.0.0",
+  "description": "MAISB Shield SDK — prompt injection protection for mobile AI agents",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "ai-security",
+    "prompt-injection",
+    "llm",
+    "mobile",
+    "maisb"
+  ],
+  "author": "MAISB",
+  "license": "MIT",
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "maisb-shield": "^1.0.0"
+  }
+}
