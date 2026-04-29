@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>MAISB Dashboard</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: Inter, Arial, sans-serif;
+      background: #0f0f1a;
+      color: #e0e0ff;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 40px;
+      gap: 16px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      color: #7c6cf7;
+    }
+
+    .card {
+      background: #1a1a2e;
+      border: 1px solid #2a2a4a;
+      border-radius: 12px;
+      padding: 28px;
+      margin-bottom: 20px;
+    }
+
+    .card h2 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .stat {
+      font-size: 2.5rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .stat-sub {
+      font-size: 0.9rem;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .api-key {
+      font-family: monospace;
+      background: #0d0d1a;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      font-size: 0.95rem;
+      letter-spacing: 1px;
+      color: #a0f0a0;
+      overflow-wrap: anywhere;
+      flex: 1;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge.free {
+      background: #2a2a3a;
+      color: #aaa;
+    }
+
+    .badge.pro {
+      background: #2a1a4a;
+      color: #c080ff;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-size: 0.95rem;
+    }
+
+    .btn-primary {
+      background: #7c6cf7;
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: #6a5ce6;
+    }
+
+    .btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .progress-bar {
+      background: #2a2a3a;
+      border-radius: 6px;
+      height: 10px;
+      margin-top: 12px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 6px;
+      background: #7c6cf7;
+      transition: width 0.5s;
+    }
+
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .key-row {
+      display: flex;
+      align-items: center;
+      margin-top: 8px;
+      gap: 10px;
+    }
+
+    .copy-btn {
+      background: none;
+      border: 1px solid #444;
+      color: #aaa;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .copy-btn:hover {
+      border-color: #7c6cf7;
+      color: #fff;
+    }
+
+    #login-screen {
+      max-width: 400px;
+      margin: 120px auto;
+      text-align: center;
+    }
+
+    #login-screen input {
+      width: 100%;
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #1a1a2e;
+      color: white;
+      font-size: 1rem;
+      margin: 12px 0;
+    }
+
+    #error-msg {
+      color: #f07070;
+      font-size: 0.85rem;
+      margin-top: 8px;
+      display: none;
+    }
+
+    #success-msg {
+      color: #a0f0a0;
+      font-size: 0.85rem;
+      margin-top: 8px;
+      display: none;
+    }
+
+    pre {
+      background: #0d0d1a;
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      color: #a0f0c0;
+      line-height: 1.45;
+    }
+
+    .coming-soon {
+      display: inline-block;
+      margin-top: 12px;
+      color: #888;
+      font-size: 0.85rem;
+    }
+
+    @media (max-width: 700px) {
+      .grid2 {
+        grid-template-columns: 1fr;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .key-row {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .copy-btn {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="login-screen" class="container">
+    <h1 style="margin-bottom: 20px;">🛡️ MAISB Dashboard</h1>
+    <p style="color: #888; margin-bottom: 20px;">
+      Enter your API key to view your dashboard
+    </p>
+
+    <input
+      type="text"
+      id="key-input"
+      placeholder="maisb_live_..."
+      autocomplete="off"
+    />
+
+    <button class="btn btn-primary" style="width: 100%;" onclick="login()">
+      View Dashboard
+    </button>
+
+    <div id="error-msg">Invalid API key or API is not reachable.</div>
+    <div id="success-msg">Loading dashboard...</div>
+  </div>
+
+  <div id="dashboard" style="display: none;">
+    <div class="container">
+      <header>
+        <h1>🛡️ MAISB Shield</h1>
+        <span id="plan-badge" class="badge free">FREE</span>
+      </header>
+
+      <div class="grid2">
+        <div class="card">
+          <h2>Scans This Month</h2>
+          <div class="stat" id="scan-count">—</div>
+          <div class="stat-sub" id="scan-limit">of 1,000 free scans</div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress" style="width: 0%;"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Plan</h2>
+          <div class="stat" id="plan-name" style="font-size: 1.8rem;">Free</div>
+          <div class="stat-sub" id="plan-price">$0 / month</div>
+
+          <button
+            class="btn btn-primary"
+            style="margin-top: 16px;"
+            disabled
+            title="Stripe billing is not enabled yet"
+          >
+            Upgrade to Pro — Coming Soon
+          </button>
+
+          <div class="coming-soon">
+            Billing is disabled for now. You can enable Stripe later.
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Your API Key</h2>
+
+        <div class="key-row">
+          <div class="api-key" id="api-key-display">•••••••••••••</div>
+          <button class="copy-btn" onclick="copyKey()">Copy</button>
+          <button class="copy-btn" onclick="toggleKey()" id="show-btn">Show</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Quick Start</h2>
+
+        <pre>pip install maisb-shield
+
+from maisb_shield import shield
+
+result = shield.check(
+    payload="user input here",
+    channel="clipboard",
+    objective="payment_intent",
+    api_key="<span id="qs-key">YOUR_KEY</span>"
+)
+
+if result.blocked:
+    print("Threat detected:", result.decision)</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "https://maisb-production.up.railway.app";
+
+    let currentKey = "";
+    let keyVisible = false;
+
+    async function login() {
+      const keyInput = document.getElementById("key-input");
+      const errorMsg = document.getElementById("error-msg");
+      const successMsg = document.getElementById("success-msg");
+
+      const key = keyInput.value.trim();
+
+      errorMsg.style.display = "none";
+      successMsg.style.display = "none";
+
+      if (!key) {
+        errorMsg.textContent = "Please enter your API key.";
+        errorMsg.style.display = "block";
+        return;
+      }
+
+      try {
+        successMsg.style.display = "block";
+
+        const res = await fetch(`${API_BASE}/usage?api_key=${encodeURIComponent(key)}`);
+
+        if (!res.ok) {
+          throw new Error("Invalid API key or API error");
+        }
+
+        const data = await res.json();
+
+        currentKey = key;
+        renderDashboard(data);
+      } catch (error) {
+        successMsg.style.display = "none";
+        errorMsg.textContent = "Invalid API key or API is not reachable.";
+        errorMsg.style.display = "block";
+      }
+    }
+
+    function renderDashboard(data) {
+      document.getElementById("login-screen").style.display = "none";
+      document.getElementById("dashboard").style.display = "block";
+
+      const scanCount = Number(data.scan_count || 0);
+      const plan = data.plan || "free";
+
+      document.getElementById("scan-count").textContent = scanCount.toLocaleString();
+
+      const limit = plan === "pro" ? "∞" : "1,000";
+      document.getElementById("scan-limit").textContent = `of ${limit} scans/month`;
+
+      const pct = plan === "pro" ? 100 : Math.min(100, (scanCount / 1000) * 100);
+      document.getElementById("progress").style.width = pct + "%";
+
+      document.getElementById("plan-badge").textContent = plan.toUpperCase();
+      document.getElementById("plan-badge").className = `badge ${plan}`;
+
+      document.getElementById("plan-name").textContent = plan === "pro" ? "Pro" : "Free";
+      document.getElementById("plan-price").textContent = plan === "pro" ? "Billing active" : "$0 / month";
+
+      document.getElementById("api-key-display").textContent = "•".repeat(currentKey.length);
+      document.getElementById("qs-key").textContent = currentKey;
+    }
+
+    async function copyKey() {
+      try {
+        await navigator.clipboard.writeText(currentKey);
+        alert("API key copied!");
+      } catch (error) {
+        alert("Could not copy API key. Please copy it manually.");
+      }
+    }
+
+    function toggleKey() {
+      const el = document.getElementById("api-key-display");
+      const btn = document.getElementById("show-btn");
+
+      keyVisible = !keyVisible;
+
+      el.textContent = keyVisible ? currentKey : "•".repeat(currentKey.length);
+      btn.textContent = keyVisible ? "Hide" : "Show";
+    }
+
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("key")) {
+      document.getElementById("key-input").value = params.get("key");
+      login();
+    }
+  </script>
+</body>
+</html>
