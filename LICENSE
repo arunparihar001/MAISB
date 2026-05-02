@@ -1,0 +1,24 @@
+Proprietary License
+
+Copyright (c) 2026 Arun Lal Parihar. All rights reserved.
+
+This repository and all associated files, including but not limited to source code, documentation, benchmark packs, scenario data, taxonomies, SDK logic, evaluation results, model prompts, and related materials, are proprietary and confidential unless explicitly stated otherwise in writing.
+
+Permission is granted only to view the contents of this repository for evaluation and review purposes.
+
+You may not:
+
+1. copy, modify, adapt, translate, or create derivative works;
+2. redistribute, sublicense, sell, rent, lease, or otherwise transfer the materials;
+3. use the code, benchmark, scenario packs, taxonomy, or SDK logic in any commercial product or service;
+4. use the materials to train, fine-tune, evaluate, or benchmark AI models or security products;
+5. host, deploy, or operate a competing or derivative service based on this repository;
+6. remove copyright, attribution, or proprietary notices.
+
+Any use beyond viewing for evaluation requires prior written permission from Arun Lal Parihar.
+
+THE SOFTWARE AND MATERIALS ARE PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, SECURITY, NON-INFRINGEMENT, OR ACCURACY.
+
+In no event shall the author be liable for any claim, damages, or other liability arising from the use of this software or materials.
+
+For licensing inquiries, contact Arun Lal Parihar.
