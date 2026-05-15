@@ -1,0 +1,17 @@
+README_PHASE2_PASTE_GUIDE.md
+SCAN_API_PHASE2_INSERTS.md
+docs/PHASE2_TEST_COMMANDS.ps1
+maisb/core/explainability/__init__.py
+maisb/core/explainability/decision_reasoning.py
+maisb/core/explainability/risk_explanations.py
+maisb/core/explainability/trace_explanations.py
+maisb/core/tracing/__init__.py
+maisb/core/tracing/channel_trace.py
+maisb/core/tracing/propagation_graph.py
+maisb/core/tracing/trust_chain.py
+maisb/core/trust/__init__.py
+maisb/core/trust/channel_trust.py
+maisb/core/trust/reputation_engine.py
+maisb/core/trust/trust_scores.py
+maisb/llm_proxy/api/phase2_trace.py
+tools/apply_phase2_patch.py
