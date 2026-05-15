@@ -1,7 +1,7 @@
 # maisb/llm_proxy/api/scan_api.py
 # ─────────────────────────────────────────────────────────────────────────────
 # MAISB Production Scan API — v2.1.0
-# Wires: core scan + signup + certify + billing
+# Wires: core scan + enterprise Phase 1 foundation
 #
 # Run locally:
 #   uvicorn api.scan_api:app --host 127.0.0.1 --port 8001 --reload
@@ -13,7 +13,6 @@ import sqlite3
 import datetime
 import os
 import sys
-import hashlib
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,11 +22,6 @@ from pydantic import BaseModel
 from core.models import ScanRequest as PipelineScanRequest
 from pipeline.runner import run_pipeline
 
-# ── New routers wired in ──────────────────────────────────────────────────────
-from api.signup  import router as signup_router   # Part 1 — self-serve keys
-from api.certify import router as certify_router  # Part 3 — MAISB Certify
-from api.billing import router as billing_router  # Part 4 — Paddle billing
-
 # ── Enterprise Phase 1 complete imports ──────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -35,7 +29,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from maisb.core.database import init_db as init_enterprise_db, get_db_session
 from maisb.core.migrations import run_phase1_migrations
-from maisb.core.models.auth import APIKey as EnterpriseAPIKey
 from maisb.core.bootstrap import ensure_default_enterprise
 from maisb.core.policies.engine import PolicyEngine
 from maisb.core.audit.logger import AuditLogger
@@ -44,12 +37,13 @@ from maisb.core.governance.retention_policy import get_retention_policy
 from maisb.core.governance.privacy_modes import sanitize_payload_preview
 from api.enterprise_routes import router as enterprise_router
 
-DB_PATH                = os.environ.get("DB_PATH", "usage.db")
+DB_PATH = os.environ.get("DB_PATH", "usage.db")
 FREE_TIER_MONTHLY_LIMIT = 1000
-PRO_TIER_MONTHLY_LIMIT  = 50_000
-ADMIN_KEY              = os.environ.get("ADMIN_KEY", "change_me_in_production")
+PRO_TIER_MONTHLY_LIMIT = 50_000
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "change_me_in_production")
 
-# ── DB setup ──────────────────────────────────────────────────────────────────
+
+# ── Legacy SQLite DB setup ────────────────────────────────────────────────────
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -63,6 +57,7 @@ def init_db():
             created    TEXT
         )
     """)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,32 +71,14 @@ def init_db():
             ts             TEXT
         )
     """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS certify_orders (
-            order_id       TEXT PRIMARY KEY,
-            api_key        TEXT,
-            email          TEXT,
-            company        TEXT,
-            status         TEXT DEFAULT 'pending_payment',
-            payment_id     TEXT,
-            created        TEXT,
-            paid_at        TEXT,
-            completed_at   TEXT,
-            score          REAL,
-            grade          TEXT,
-            adr            REAL,
-            fpr            REAL,
-            report_json    TEXT
-        )
-    """)
 
-    # ── Schema migrations (safe on existing DBs) ──────────────────────────────
+    # Safe migrations for older local DBs
     scan_cols = {r[1] for r in conn.execute("PRAGMA table_info(scans)").fetchall()}
     for col, sql in {
-        "channel":        "ALTER TABLE scans ADD COLUMN channel TEXT",
-        "objective":      "ALTER TABLE scans ADD COLUMN objective TEXT",
+        "channel": "ALTER TABLE scans ADD COLUMN channel TEXT",
+        "objective": "ALTER TABLE scans ADD COLUMN objective TEXT",
         "taxonomy_class": "ALTER TABLE scans ADD COLUMN taxonomy_class TEXT",
-        "processing_ms":  "ALTER TABLE scans ADD COLUMN processing_ms INTEGER",
+        "processing_ms": "ALTER TABLE scans ADD COLUMN processing_ms INTEGER",
     }.items():
         if col not in scan_cols:
             conn.execute(sql)
@@ -110,32 +87,38 @@ def init_db():
     if "email" not in key_cols:
         conn.execute("ALTER TABLE api_keys ADD COLUMN email TEXT")
 
-    # Seed the public test key
+    # Seed legacy public test key for local/staging compatibility
     conn.execute(
         "INSERT OR IGNORE INTO api_keys (key, plan, scan_count, created) VALUES (?, 'free', 0, ?)",
         ("maisb_live_test123", datetime.datetime.utcnow().isoformat())
     )
+
     conn.commit()
     conn.close()
+
 
 init_db()
 
 # Initialize SQLAlchemy enterprise database and seed default tenant/policy.
 init_enterprise_db()
 run_phase1_migrations()
+
 with get_db_session() as db:
     ensure_default_enterprise(db)
+
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title       = "MAISB Scan API",
-    version     = "2.1.0",
-    description = (
-        "Mobile AI Security Benchmark — Prompt Injection Detection\n\n"
-        "**Get your free API key:** POST /v1/signup\n\n"
+    title="MAISB Enterprise Phase 1 API",
+    version="2.1.0",
+    description=(
+        "Mobile AI Security Benchmark — Enterprise Phase 1 API\n\n"
         "**Run a scan:** POST /v1/scan\n\n"
-        "**MAISB Certify (annual assessment):** POST /v1/certify/start"
+        "**Enterprise health:** GET /v1/enterprise/health\n\n"
+        "**Generate enterprise API key:** POST /v1/auth/generate-key\n\n"
+        "**View active policy:** GET /v1/policies/active\n\n"
+        "**View audit logs:** GET /v1/audit/logs"
     ),
 )
 
@@ -153,39 +136,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Wire all routers
-app.include_router(signup_router)
-app.include_router(certify_router)
-app.include_router(billing_router)
+# Wire Phase 1 enterprise router only.
+# Signup, billing, and certify will be added later as proper product modules.
 app.include_router(enterprise_router)
+
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
 class ScanRequestBody(BaseModel):
-    payload:    str
-    channel:    str = "unknown"
-    objective:  str = "general"
-    api_key:    str
+    payload: str
+    channel: str = "unknown"
+    objective: str = "general"
+    api_key: str
     session_id: str = None
-    tenant_id:  str = "default"
+    tenant_id: str = "default"
+
 
 class ScanResponseBody(BaseModel):
-    decision:           str
-    risk_score:         float
-    taxonomy_class:     str
+    decision: str
+    risk_score: float
+    taxonomy_class: str
     recommended_action: str
-    processing_ms:      int
-
-# ── DB helpers ────────────────────────────────────────────────────────────────
+    processing_ms: int
 
 
-def get_enterprise_key_info(api_key: str, tenant_id: str | None = None, consume_usage: bool = False) -> dict | None:
+# ── DB/Auth helpers ───────────────────────────────────────────────────────────
+
+def get_enterprise_key_info(
+    api_key: str,
+    tenant_id: str | None = None,
+    consume_usage: bool = False
+) -> dict | None:
     """
     Verify API keys created by /v1/auth/generate-key.
 
-    Also enforces:
+    Enforces:
     - tenant binding
     - scan scope
+    - RBAC scan permission
     - monthly usage limit
     """
     if not api_key:
@@ -201,6 +189,7 @@ def get_enterprise_key_info(api_key: str, tenant_id: str | None = None, consume_
                 required_permission="scan",
                 consume_usage=consume_usage,
             )
+
             return {
                 "key": api_key,
                 "plan": "enterprise",
@@ -212,46 +201,89 @@ def get_enterprise_key_info(api_key: str, tenant_id: str | None = None, consume_
                 "monthly_limit": ctx.monthly_limit,
                 "enterprise": True,
             }
+
     except HTTPException:
         raise
     except Exception:
         return None
 
+
 def get_key_info(api_key: str) -> dict:
+    """
+    Check legacy SQLite API key first.
+    If not found, check enterprise API key.
+    """
     conn = sqlite3.connect(DB_PATH)
-    row  = conn.execute(
-        "SELECT key, plan, scan_count FROM api_keys WHERE key = ?", (api_key,)
+    row = conn.execute(
+        "SELECT key, plan, scan_count FROM api_keys WHERE key = ?",
+        (api_key,)
     ).fetchone()
     conn.close()
+
     if not row:
         enterprise_info = get_enterprise_key_info(api_key)
         if enterprise_info:
             return enterprise_info
-        raise HTTPException(status_code=401, detail="Invalid API key. Get one free: POST /v1/signup")
-    return {"key": row[0], "plan": row[1] or "free", "scan_count": row[2] or 0, "tenant_id": "default", "enterprise": False}
+        raise HTTPException(status_code=401, detail="Invalid API key.")
+
+    return {
+        "key": row[0],
+        "plan": row[1] or "free",
+        "scan_count": row[2] or 0,
+        "tenant_id": "default",
+        "enterprise": False,
+    }
+
 
 def enforce_quota(api_key: str):
-    info  = get_key_info(api_key)
+    """
+    Legacy SQLite quota enforcement.
+    Enterprise keys are enforced by authenticate_api_key(..., consume_usage=True).
+    """
+    info = get_key_info(api_key)
+
     if info.get("enterprise"):
         return info
+
     limit = PRO_TIER_MONTHLY_LIMIT if info["plan"] == "pro" else FREE_TIER_MONTHLY_LIMIT
+
     if info["scan_count"] >= limit:
-        raise HTTPException(status_code=429, detail={
-            "error":       "quota_exceeded",
-            "message":     f"{info['plan'].title()} plan limit of {limit:,} scans/month reached.",
-            "upgrade_url": "https://maisb-production.up.railway.app/v1/billing/plans",
-        })
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "quota_exceeded",
+                "message": f"{info['plan'].title()} plan limit of {limit:,} scans/month reached.",
+                "next_step": "Contact an admin to increase the API key usage limit.",
+            },
+        )
+
     return info
 
+
 def log_scan(api_key, decision, risk_score, taxonomy, channel, objective, ms):
+    """
+    Legacy SQLite scan log for backward compatibility.
+    Enterprise audit logging is handled separately by AuditLogger.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO scans (api_key,decision,risk_score,taxonomy_class,channel,objective,processing_ms,ts) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        (api_key, decision, risk_score, taxonomy, channel, objective, ms,
-         datetime.datetime.utcnow().isoformat())
+        (
+            api_key,
+            decision,
+            risk_score,
+            taxonomy,
+            channel,
+            objective,
+            ms,
+            datetime.datetime.utcnow().isoformat(),
+        ),
     )
-    conn.execute("UPDATE api_keys SET scan_count = scan_count + 1 WHERE key = ?", (api_key,))
+    conn.execute(
+        "UPDATE api_keys SET scan_count = scan_count + 1 WHERE key = ?",
+        (api_key,),
+    )
     conn.commit()
     conn.close()
 
@@ -272,6 +304,7 @@ def apply_enterprise_policy(
 
     with get_db_session() as db:
         ensure_default_enterprise(db, tenant_id=tenant_id)
+
         retention_policy = get_retention_policy(db, tenant_id)
         payload_preview = sanitize_payload_preview(
             payload,
@@ -289,6 +322,7 @@ def apply_enterprise_policy(
         )
 
         final_decision = normalized_pipeline
+
         if normalized_pipeline == "BLOCKED":
             final_decision = "BLOCKED"
         elif policy_decision.action == "BLOCK":
@@ -308,7 +342,9 @@ def apply_enterprise_policy(
             risk_score=risk_score,
             payload_preview=payload_preview,
         )
+
         return final_decision
+
 
 # ── Core endpoints ────────────────────────────────────────────────────────────
 
@@ -316,27 +352,29 @@ def apply_enterprise_policy(
 def health():
     return {"status": "ok", "version": "2.1.0"}
 
+
 @app.get("/", tags=["System"])
 def root():
     return {
-        "name":    "MAISB Scan API",
+        "name": "MAISB Enterprise Phase 1 API",
         "version": "2.1.0",
-        "docs":    "/docs",
-        "signup":  "POST /v1/signup",
-        "scan":    "POST /v1/scan",
-        "plans":   "GET /v1/billing/plans",
-        "certify": "POST /v1/certify/start",
+        "docs": "/docs",
+        "health": "GET /health",
+        "scan": "POST /v1/scan",
         "enterprise_health": "GET /v1/enterprise/health",
         "enterprise_keys": "POST /v1/auth/generate-key",
+        "active_policy": "GET /v1/policies/active",
+        "audit_logs": "GET /v1/audit/logs",
         "governance_retention": "GET /v1/governance/retention",
     }
+
 
 @app.post("/v1/scan", response_model=ScanResponseBody, tags=["Scan"])
 def scan(body: ScanRequestBody, request: Request):
     """
     Scan a payload for prompt injection attacks.
 
-    Enterprise Phase 1 complete additions:
+    Enterprise Phase 1 additions:
     - tenant context from X-Tenant-ID or body.tenant_id
     - enterprise API key support
     - scan scope enforcement
@@ -349,19 +387,26 @@ def scan(body: ScanRequestBody, request: Request):
 
     # Enterprise keys are strictly tenant/scoped/role/usage checked here.
     # Legacy SQLite keys continue to work through the older quota logic.
-    key_info = get_enterprise_key_info(body.api_key, tenant_id=requested_tenant_id, consume_usage=True)
+    key_info = get_enterprise_key_info(
+        body.api_key,
+        tenant_id=requested_tenant_id,
+        consume_usage=True,
+    )
+
     if not key_info:
         key_info = enforce_quota(body.api_key)
 
     tenant_id = key_info.get("tenant_id") or requested_tenant_id or "default"
 
-    result = run_pipeline(PipelineScanRequest(
-        payload    = body.payload,
-        channel    = body.channel,
-        objective  = body.objective,
-        api_key    = body.api_key,
-        session_id = body.session_id,
-    ))
+    result = run_pipeline(
+        PipelineScanRequest(
+            payload=body.payload,
+            channel=body.channel,
+            objective=body.objective,
+            api_key=body.api_key,
+            session_id=body.session_id,
+        )
+    )
 
     final_decision = apply_enterprise_policy(
         tenant_id=tenant_id,
@@ -372,67 +417,115 @@ def scan(body: ScanRequestBody, request: Request):
         risk_score=result.risk_score,
     )
 
-    log_scan(body.api_key, final_decision, result.risk_score,
-             result.taxonomy_class, body.channel, body.objective, result.processing_ms)
+    log_scan(
+        body.api_key,
+        final_decision,
+        result.risk_score,
+        result.taxonomy_class,
+        body.channel,
+        body.objective,
+        result.processing_ms,
+    )
 
     return ScanResponseBody(
-        decision           = final_decision,
-        risk_score         = result.risk_score,
-        taxonomy_class     = result.taxonomy_class,
-        recommended_action = result.recommended_action,
-        processing_ms      = result.processing_ms,
+        decision=final_decision,
+        risk_score=result.risk_score,
+        taxonomy_class=result.taxonomy_class,
+        recommended_action=result.recommended_action,
+        processing_ms=result.processing_ms,
     )
+
 
 @app.get("/usage", tags=["Auth"])
 def usage(api_key: str):
-    """Check your current usage and quota."""
-    info  = get_key_info(api_key)
+    """Check current usage and quota for legacy or enterprise keys."""
+    info = get_key_info(api_key)
+
+    if info.get("enterprise"):
+        limit = info.get("monthly_limit")
+        scan_count = info.get("scan_count", 0)
+
+        return {
+            "plan": info["plan"],
+            "tenant_id": info.get("tenant_id"),
+            "key_id": info.get("key_id"),
+            "role": info.get("role"),
+            "scopes": info.get("scopes", []),
+            "scan_count": scan_count,
+            "limit": limit,
+            "remaining": None if limit is None else max(0, limit - scan_count),
+        }
+
     limit = PRO_TIER_MONTHLY_LIMIT if info["plan"] == "pro" else FREE_TIER_MONTHLY_LIMIT
+
     return {
-        "plan":        info["plan"],
-        "scan_count":  info["scan_count"],
-        "limit":       limit,
-        "remaining":   max(0, limit - info["scan_count"]),
-        "upgrade_url": "https://maisb-production.up.railway.app/v1/billing/plans",
+        "plan": info["plan"],
+        "scan_count": info["scan_count"],
+        "limit": limit,
+        "remaining": max(0, limit - info["scan_count"]),
+        "next_step": "Contact an admin to increase the API key usage limit.",
     }
 
-# ── Admin endpoints ───────────────────────────────────────────────────────────
+
+# ── Admin endpoints for legacy SQLite keys ────────────────────────────────────
 
 @app.post("/admin/reset-monthly-counts", include_in_schema=False)
 def reset_monthly_counts(admin_key: str):
     if admin_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Forbidden")
+
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE api_keys SET scan_count = 0")
     conn.commit()
     conn.close()
+
     return {"reset": True}
+
 
 @app.get("/admin/keys", include_in_schema=False)
 def list_keys(admin_key: str):
     if admin_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Forbidden")
+
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
         "SELECT key, plan, scan_count, email, created FROM api_keys ORDER BY created DESC"
     ).fetchall()
     conn.close()
-    return {"keys": [{"key": r[0][:14]+"****", "plan": r[1], "scans": r[2],
-                      "email": r[3], "created": r[4]} for r in rows]}
+
+    return {
+        "keys": [
+            {
+                "key": r[0][:14] + "****",
+                "plan": r[1],
+                "scans": r[2],
+                "email": r[3],
+                "created": r[4],
+            }
+            for r in rows
+        ]
+    }
+
 
 @app.get("/admin/stats", include_in_schema=False)
 def stats(admin_key: str):
     if admin_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Forbidden")
+
     conn = sqlite3.connect(DB_PATH)
     total_scans = conn.execute("SELECT SUM(scan_count) FROM api_keys").fetchone()[0] or 0
-    total_keys  = conn.execute("SELECT COUNT(*) FROM api_keys").fetchone()[0] or 0
-    blocked     = conn.execute("SELECT COUNT(*) FROM scans WHERE decision='BLOCKED'").fetchone()[0] or 0
-    allowed     = conn.execute("SELECT COUNT(*) FROM scans WHERE decision='ALLOWED'").fetchone()[0] or 0
-    review      = conn.execute("SELECT COUNT(*) FROM scans WHERE decision='REVIEW'").fetchone()[0] or 0
+    total_keys = conn.execute("SELECT COUNT(*) FROM api_keys").fetchone()[0] or 0
+    blocked = conn.execute("SELECT COUNT(*) FROM scans WHERE decision='BLOCKED'").fetchone()[0] or 0
+    allowed = conn.execute("SELECT COUNT(*) FROM scans WHERE decision='ALLOWED'").fetchone()[0] or 0
+    review = conn.execute("SELECT COUNT(*) FROM scans WHERE decision='REVIEW'").fetchone()[0] or 0
     conn.close()
+
     return {
-        "total_api_keys":   total_keys,
-        "total_scans":      total_scans,
-        "decisions":        {"BLOCKED": blocked, "ALLOWED": allowed, "REVIEW": review},
+        "total_api_keys": total_keys,
+        "total_scans": total_scans,
+        "decisions": {
+            "BLOCKED": blocked,
+            "ALLOWED": allowed,
+            "REVIEW": review,
+        },
     }
