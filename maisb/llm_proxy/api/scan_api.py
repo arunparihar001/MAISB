@@ -1,6 +1,6 @@
 # maisb/llm_proxy/api/scan_api.py
 # ─────────────────────────────────────────────────────────────────────────────
-# MAISB Enterprise Phase 3 API — v2.3.0
+# MAISB Enterprise Phase 4 API — v2.4.0
 #
 # Railway Root Directory:
 #   /maisb/llm_proxy
@@ -8,7 +8,7 @@
 # Railway Start Command:
 #   uvicorn api.scan_api:app --host 0.0.0.0 --port $PORT
 #
-# This file is self-contained for Phase 1 staging.
+# This file is self-contained for Phase 1-4 staging.
 # It does NOT depend on sibling folder maisb/core, because Railway root is
 # currently maisb/llm_proxy.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -28,6 +28,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from api.phase3_dashboard import router as phase3_router
+from api.phase4_soc import router as phase4_router
 from pydantic import BaseModel, Field
 
 # Make local llm_proxy imports work on Railway and locally.
@@ -51,7 +52,8 @@ DEFAULT_TENANT_ID = "default"
 DEFAULT_PRIVACY_MODE = "standard"
 DEFAULT_RETENTION_DAYS = 90
 
-PHASE2_VERSION = "2.3.0"
+API_VERSION = "2.4.0"
+PHASE2_VERSION = API_VERSION
 
 # Phase 2 adaptive channel trust scores.
 # Low-trust channels add supply-chain risk when payloads move across surfaces.
@@ -920,16 +922,16 @@ def recommended_action_for(decision: str, original_recommendation: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="MAISB Enterprise Phase 3 API",
-    version="2.3.0",
+    title="MAISB Enterprise Phase 4 API",
+    version="2.4.0",
     description=(
-        "Mobile AI Security Benchmark — Enterprise Phase 1 API\n\n"
+        "Mobile AI Security Benchmark — Enterprise Phase 1-4 API\n\n"
         "**Run a scan:** POST /v1/scan\n\n"
         "**Enterprise health:** GET /v1/enterprise/health\n\n"
         "**Generate enterprise API key:** POST /v1/auth/generate-key\n\n"
         "**View active policy:** GET /v1/policies/active\n\n"
         "**View audit logs:** GET /v1/audit/logs\n\n"
-        "**View retention governance:** GET /v1/governance/retention\n\n**Phase 2 health:** GET /v1/phase2/health\n\n**Trace payload:** POST /v1/trace/payload\n\n**Phase 3 health:** GET /v1/phase3/health\n\n**Dashboard:** GET /dashboard"
+        "**View retention governance:** GET /v1/governance/retention\n\n**Phase 2 health:** GET /v1/phase2/health\n\n**Trace payload:** POST /v1/trace/payload\n\n**Phase 3 health:** GET /v1/phase3/health\n\n**Dashboard:** GET /dashboard\n\n**Phase 4 health:** GET /v1/phase4/health\n\n**SOC console:** GET /soc"
     ),
 )
 
@@ -950,6 +952,9 @@ app.add_middleware(
 
 # Phase 3 dashboard + telemetry router
 app.include_router(phase3_router)
+
+# Phase 4 SOC workflow + production hardening router
+app.include_router(phase4_router)
 
 
 
@@ -1753,14 +1758,14 @@ def explain_trace(trace_id: str, tenant_id: str = Query(DEFAULT_TENANT_ID)):
 
 @app.get("/health", tags=["System"])
 def health():
-    return {"status": "ok", "version": "2.3.0", "phase2": True, "phase3": True}
+    return {"status": "ok", "version": API_VERSION, "phase2": True, "phase3": True, "phase4": True}
 
 
 @app.get("/", tags=["System"])
 def root():
     return {
-        "name": "MAISB Enterprise Phase 2 API",
-        "version": "2.1.0",
+        "name": "MAISB Enterprise Phase 4 API",
+        "version": API_VERSION,
         "docs": "/docs",
         "health": "GET /health",
         "scan": "POST /v1/scan",
@@ -1777,6 +1782,11 @@ def root():
         "phase3_health": "GET /v1/phase3/health",
         "dashboard": "GET /dashboard",
         "dashboard_summary": "GET /v1/dashboard/summary",
+        "phase4_health": "GET /v1/phase4/health",
+        "soc_console": "GET /soc",
+        "soc_cases": "GET/POST /v1/soc/cases",
+        "soc_risk_queue": "GET /v1/soc/risk-queue",
+        "mobile_telemetry": "POST /v1/mobile/telemetry",
     }
 
 
