@@ -1,0 +1,5 @@
+-keep class kotlinx.serialization.** { *; }
+-keep @kotlinx.serialization.Serializable class com.maisb.shield.** { *; }
+-dontwarn kotlinx.serialization.**
+-dontwarn okhttp3.**
+-dontwarn okio.**

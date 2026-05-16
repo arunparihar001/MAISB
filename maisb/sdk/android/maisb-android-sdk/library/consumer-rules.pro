@@ -1,0 +1,2 @@
+-keep class com.maisb.shield.** { *; }
+-keep @kotlinx.serialization.Serializable class com.maisb.shield.** { *; }
