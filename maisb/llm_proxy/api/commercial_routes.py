@@ -16,6 +16,7 @@ import hashlib
 import html
 import io
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -24,6 +25,14 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+
+from services.email_service import (
+    send_admin_notification,
+    send_api_key_created_email,
+    send_billing_request_email,
+    send_certify_report_ready_email,
+    send_certify_started_email,
+)
 
 DB_PATH = os.environ.get("DB_PATH", "usage.db")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "change_me_in_production")
@@ -40,6 +49,7 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
 
 router = APIRouter(tags=["Commercial - Dashboard, Signup, Billing, Certify"])
+logger = logging.getLogger(__name__)
 
 # ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -381,6 +391,14 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
     )
     conn.commit()
     conn.close()
+    try:
+        send_api_key_created_email(body.email, raw_key, mask_key(raw_key))
+        send_admin_notification(
+            "New MAISB public signup",
+            f"Signup {signup_id} created for {body.email} on free plan.",
+        )
+    except Exception:
+        logger.exception("Email notification failure on signup")
     return {
         "created": True,
         "signup_id": signup_id,
@@ -477,6 +495,14 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    try:
+        send_billing_request_email(body.email, body.plan, request_id, body.company)
+        send_admin_notification(
+            "New MAISB billing request",
+            f"Billing request {request_id} for plan={body.plan} email={body.email} provider={provider}.",
+        )
+    except Exception:
+        logger.exception("Email notification failure on billing request")
     return {
         "request_id": request_id,
         "status": "requested",
@@ -514,6 +540,14 @@ def certify_start(body: CertifyStartRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    try:
+        send_certify_started_email(body.email, order_id, body.company)
+        send_admin_notification(
+            "New MAISB Certify order",
+            f"Certify order {order_id} created for {body.company} ({body.email}).",
+        )
+    except Exception:
+        logger.exception("Email notification failure on certify start")
     return {
         "order_id": order_id,
         "status": "assessment_requested",
@@ -564,10 +598,26 @@ def certify_complete_demo(
         """,
         (utcnow(), body.score, grade, body.adr, body.fpr, jdump(report), order_id),
     )
+    row = conn.execute("SELECT email FROM certify_orders WHERE order_id=?", (order_id,)).fetchone()
     conn.commit()
     conn.close()
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Certify order not found")
+    recipient = row["email"] if row else None
+    if recipient:
+        try:
+            send_certify_report_ready_email(
+                recipient,
+                order_id,
+                f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/report.pdf",
+                f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/badge.svg",
+            )
+            send_admin_notification(
+                "MAISB Certify report ready",
+                f"Certify order {order_id} completed with grade={grade} score={body.score}.",
+            )
+        except Exception:
+            logger.exception("Email notification failure on certify completion")
     return {"updated": True, "order_id": order_id, "report": report}
 
 

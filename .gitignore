@@ -13,6 +13,8 @@ maisb_enterprise.db
 # Dashboard frontend build artifacts and dependencies
 maisb/dashboard/frontend/node_modules/
 maisb/dashboard/frontend/dist/
+maisb/dashboard-app/node_modules/
+maisb/dashboard-app/dist/
 
 # Run results and generated charts (ignore generated outputs, keep source code)
 # JSON reports that start with "report"
