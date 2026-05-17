@@ -3,10 +3,7 @@ const ADMIN_KEY_STORAGE_KEY = 'maisb_admin_key'
 
 function encodeSecret(value: string): string {
   const bytes = new TextEncoder().encode(value)
-  let binary = ''
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte)
-  })
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
   return btoa(binary)
 }
 
