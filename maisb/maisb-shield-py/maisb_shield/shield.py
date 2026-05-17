@@ -16,9 +16,9 @@ import requests
 from dataclasses import dataclass
 
 # ──────────────────────────────────────────────────
-# Replace this URL after Railway deployment
+# Default production API base URL
 # ──────────────────────────────────────────────────
-DEFAULT_BASE_URL = "maisb-production.up.railway.app"
+DEFAULT_BASE_URL = "https://api.maisb.app"
 
 
 @dataclass

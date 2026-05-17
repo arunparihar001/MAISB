@@ -63,7 +63,10 @@ REQUIRE_SIGNUP_INVITE_CODE = os.environ.get("REQUIRE_SIGNUP_INVITE_CODE", "false
 SIGNUP_INVITE_CODE = os.environ.get("SIGNUP_INVITE_CODE", "")
 FREE_TIER_MONTHLY_LIMIT = int(os.environ.get("FREE_TIER_MONTHLY_LIMIT", "1000"))
 PRO_TIER_MONTHLY_LIMIT = int(os.environ.get("PRO_TIER_MONTHLY_LIMIT", "50000"))
-CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", "https://maisb-production.up.railway.app")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://maisb.app")
+APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
+CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
 API_VERSION = "2.5.0"
 
 # ── Pipeline imports with safe fallback ───────────────────────────────────────
@@ -138,9 +141,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://maisb-dashboard-static.vercel.app",
-        "https://www.maisb.ai",
-        "https://maisb.ai",
+        "https://maisb.app",
+        "https://www.maisb.app",
+        "https://app.maisb.app",
+        "https://api.maisb.app",
+        "https://maisb-dashboard-static.vercel.app",  # legacy Vercel dashboard fallback
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8000",
@@ -496,7 +501,7 @@ def enforce_quota(api_key: str) -> Dict[str, Any]:
             detail={
                 "error": "quota_exceeded",
                 "message": f"{info['plan'].title()} plan limit of {limit:,} scans/month reached.",
-                "upgrade_url": f"{CERTIFY_BASE_URL}/v1/public/plans",
+                "upgrade_url": f"{APP_DASHBOARD_URL}/billing",
             },
         )
     return info
@@ -663,7 +668,7 @@ def usage(api_key: str) -> Dict[str, Any]:
         "limit": limit,
         "remaining": None if limit is None else max(0, limit - info["scan_count"]),
         "email": info.get("email"),
-        "upgrade_url": f"{CERTIFY_BASE_URL}/v1/public/plans",
+        "upgrade_url": f"{APP_DASHBOARD_URL}/billing",
     }
 
 # ── Public signup / customer dashboard ───────────────────────────────────────
@@ -740,14 +745,15 @@ def public_customer_dashboard(api_key: str = Query(...)) -> Dict[str, Any]:
         },
         "usage": u,
         "quick_start": {
-            "endpoint": f"{CERTIFY_BASE_URL}/v1/scan",
+            "endpoint": f"{API_BASE_URL}/v1/scan",
             "channels": ["clipboard", "qr", "notification", "deep_link", "webview", "share_intent"],
             "android_sdk_path": "maisb/sdk/android/maisb-android-sdk",
         },
         "links": {
-            "api_docs": f"{CERTIFY_BASE_URL}/docs",
-            "phase3_dashboard": f"{CERTIFY_BASE_URL}/dashboard",
-            "soc_console": f"{CERTIFY_BASE_URL}/soc",
+            "public_site": PUBLIC_BASE_URL,
+            "api_docs": f"{API_BASE_URL}/docs",
+            "dashboard": APP_DASHBOARD_URL,
+            "soc_console": f"{APP_DASHBOARD_URL}/soc",
         },
     }
 

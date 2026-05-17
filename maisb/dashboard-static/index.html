@@ -20,15 +20,15 @@
       <p class="muted">This replaces the old static key-only dashboard and connects your Vercel dashboard to the Phase 3 analyst dashboard, Phase 4 SOC console, Android SDK telemetry, self-serve signup, Pakistan-compatible billing request flow, and Certify PDF/badge workflow.</p>
       <div class="row">
         <button class="btn" onclick="refreshAll()">Refresh All</button>
-        <a class="btn secondary" href="https://maisb-production.up.railway.app/docs" target="_blank">API Docs</a>
-        <a class="btn secondary" href="https://maisb-production.up.railway.app/dashboard" target="_blank">Railway Phase 3 Dashboard</a>
-        <a class="btn secondary" href="https://maisb-production.up.railway.app/soc" target="_blank">Railway SOC Console</a>
+        <a class="btn secondary" href="https://api.maisb.app/docs" target="_blank">API Docs</a>
+        <a class="btn secondary" href="https://app.maisb.app" target="_blank">Customer Dashboard</a>
+        <a class="btn secondary" href="https://maisb.app" target="_blank">Public Site</a>
       </div>
     </div>
     <div class="card">
       <h2>Connection Settings</h2>
       <div class="form" style="grid-template-columns:1fr">
-        <div><label>API Base</label><input id="apiBase" value="https://maisb-production.up.railway.app" /></div>
+        <div><label>API Base</label><input id="apiBase" value="https://api.maisb.app" /></div>
         <div><label>Tenant ID</label><input id="tenantId" value="default" /></div>
         <div><label>Admin Key / Bearer Token</label><input id="adminKey" type="password" placeholder="Paste ADMIN_KEY for SOC + analyst panels" /></div>
         <div class="row"><button class="btn" onclick="saveSettings()">Save Settings</button><button class="btn secondary" onclick="clearSettings()">Clear</button></div>
@@ -153,7 +153,7 @@
     <div class="card"><h2>Android SDK Quick Integration</h2>
       <div class="code" id="androidCode">val config = MAISBConfig(
     apiKey = "YOUR_MAISB_API_KEY",
-    baseUrl = "https://maisb-production.up.railway.app",
+    baseUrl = "https://api.maisb.app",
     tenantId = "default",
     telemetryEnabled = true
 )

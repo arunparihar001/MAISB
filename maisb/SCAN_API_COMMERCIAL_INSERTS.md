@@ -62,6 +62,7 @@ Make sure your CORS allow list includes:
 
 ```python
 "https://maisb-dashboard-static.vercel.app",
+# legacy fallback origin
 "http://localhost:5173",
 "http://localhost:3000",
 ```

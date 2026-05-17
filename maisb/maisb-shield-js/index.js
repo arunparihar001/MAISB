@@ -14,9 +14,9 @@
 //   if (result.blocked) throw new Error("Injection detected — aborting.");
 
 // ──────────────────────────────────────────────────
-// Replace this URL after Railway deployment
+// Default production API base URL
 // ──────────────────────────────────────────────────
-const DEFAULT_BASE_URL = "https://maisb-production.up.railway.app";
+const DEFAULT_BASE_URL = "https://api.maisb.app";
 
 /**
  * @typedef {Object} ShieldDecision
