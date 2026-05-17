@@ -611,8 +611,9 @@ def admin_router_diagnostics(
     require_admin(admin_key, authorization)
     return {
         "routers": ROUTER_STATUS,
-        "internal_router_errors": INTERNAL_ROUTER_ERRORS,
-        "pipeline_import_error": PIPELINE_IMPORT_ERROR,
+        "internal_router_error_count": len(INTERNAL_ROUTER_ERRORS),
+        "modules_with_errors": sorted(INTERNAL_ROUTER_ERRORS.keys()),
+        "pipeline_fallback_active": PIPELINE_IMPORT_ERROR is not None,
     }
 
 

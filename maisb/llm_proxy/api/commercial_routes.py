@@ -397,8 +397,8 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
             "New MAISB public signup",
             f"Signup {signup_id} created for {body.email} on free plan.",
         )
-    except Exception as exc:
-        logger.exception("Email notification failure on signup: %s", exc)
+    except Exception:
+        logger.exception("Email notification failure on signup")
     return {
         "created": True,
         "signup_id": signup_id,
@@ -501,8 +501,8 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
             "New MAISB billing request",
             f"Billing request {request_id} for plan={body.plan} email={body.email} provider={provider}.",
         )
-    except Exception as exc:
-        logger.exception("Email notification failure on billing request: %s", exc)
+    except Exception:
+        logger.exception("Email notification failure on billing request")
     return {
         "request_id": request_id,
         "status": "requested",
@@ -546,8 +546,8 @@ def certify_start(body: CertifyStartRequest) -> Dict[str, Any]:
             "New MAISB Certify order",
             f"Certify order {order_id} created for {body.company} ({body.email}).",
         )
-    except Exception as exc:
-        logger.exception("Email notification failure on certify start: %s", exc)
+    except Exception:
+        logger.exception("Email notification failure on certify start")
     return {
         "order_id": order_id,
         "status": "assessment_requested",
@@ -616,8 +616,8 @@ def certify_complete_demo(
                 "MAISB Certify report ready",
                 f"Certify order {order_id} completed with grade={grade} score={body.score}.",
             )
-        except Exception as exc:
-            logger.exception("Email notification failure on certify completion: %s", exc)
+        except Exception:
+            logger.exception("Email notification failure on certify completion")
     return {"updated": True, "order_id": order_id, "report": report}
 
 

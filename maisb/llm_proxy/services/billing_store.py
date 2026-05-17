@@ -7,6 +7,10 @@ from typing import Any, Dict, Optional
 DB_PATH = os.environ.get("DB_PATH", "usage.db")
 
 
+def _utcnow_iso() -> str:
+    return dt.datetime.now(dt.UTC).isoformat()
+
+
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -47,7 +51,7 @@ def store_webhook_event(event_id: str, event_type: str, payload: Dict[str, Any])
     try:
         conn.execute(
             "INSERT INTO paddle_webhook_events(event_id,event_type,payload_json,received_at) VALUES (?,?,?,?)",
-            (event_id, event_type, json.dumps(payload, separators=(",", ":")), dt.datetime.utcnow().isoformat()),
+            (event_id, event_type, json.dumps(payload, separators=(",", ":")), _utcnow_iso()),
         )
         conn.commit()
         return True
@@ -71,7 +75,7 @@ def upsert_subscription(email: str, plan: str, status: str, customer_id: str, su
             price_id=excluded.price_id,
             updated_at=excluded.updated_at
         """,
-        (email, plan, status, customer_id, subscription_id, price_id, dt.datetime.utcnow().isoformat()),
+        (email, plan, status, customer_id, subscription_id, price_id, _utcnow_iso()),
     )
     conn.execute("UPDATE api_keys SET plan=? WHERE lower(email)=lower(?)", (plan, email))
     conn.commit()

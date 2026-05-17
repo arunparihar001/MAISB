@@ -1,13 +1,10 @@
-const KEY = 'maisb_api_key'
+let runtimeApiKey = ''
 
 export function getApiKey(): string {
-  return localStorage.getItem(KEY) || ''
+  if (runtimeApiKey) return runtimeApiKey
+  return new URLSearchParams(window.location.search).get('api_key') || ''
 }
 
 export function setApiKey(value: string): void {
-  if (!value) {
-    localStorage.removeItem(KEY)
-    return
-  }
-  localStorage.setItem(KEY, value)
+  runtimeApiKey = value || ''
 }
