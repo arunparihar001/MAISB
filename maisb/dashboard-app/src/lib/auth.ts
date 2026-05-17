@@ -1,6 +1,7 @@
 const API_KEY_STORAGE_KEY = 'maisb_api_key'
 const ADMIN_KEY_STORAGE_KEY = 'maisb_admin_key'
 
+// NOTE: This is lightweight obfuscation for MVP browser storage, not cryptographic protection.
 function encodeSecret(value: string): string {
   const bytes = new TextEncoder().encode(value)
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')

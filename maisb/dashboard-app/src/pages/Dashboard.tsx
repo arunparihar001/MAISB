@@ -6,6 +6,7 @@ import UsageChart from '../components/UsageChart'
 
 export default function Dashboard() {
   const [usage, setUsage] = useState({ scan_count: 0, limit: 1000, plan: 'free', remaining: 1000 })
+  const planLabel = typeof usage.plan === 'string' ? usage.plan.toUpperCase() : 'FREE'
 
   useEffect(() => {
     const apiKey = getApiKey()
@@ -25,7 +26,7 @@ export default function Dashboard() {
       <h1>Security Overview</h1>
       <p className="muted-text">Live posture for your protected mobile AI runtime.</p>
       <div className="grid">
-        <MetricCard label="Plan" value={usage.plan.toUpperCase()} />
+        <MetricCard label="Plan" value={planLabel} />
         <MetricCard label="Scans Processed" value={usage.scan_count} />
         <MetricCard label="Remaining Quota" value={usage.remaining} />
       </div>

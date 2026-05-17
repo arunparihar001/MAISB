@@ -7,6 +7,7 @@ export default function SocConsole() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([])
   const [adminKeyInput, setAdminKeyInput] = useState(getAdminKey())
   const [error, setError] = useState('')
+  const [showAdminKey, setShowAdminKey] = useState(false)
 
   const loadSocData = async (adminKey: string) => {
     if (!adminKey.trim()) {
@@ -51,9 +52,11 @@ export default function SocConsole() {
           value={adminKeyInput}
           onChange={(e) => setAdminKeyInput(e.target.value)}
           placeholder="Admin key"
-          type="password"
+          type={showAdminKey ? 'text' : 'password'}
+          autoComplete="off"
         />
         <button onClick={() => loadSocData(adminKeyInput)}>Load SOC Data</button>
+        <button className="btn-secondary" onClick={() => setShowAdminKey((v) => !v)}>{showAdminKey ? 'Hide' : 'Show'} key</button>
       </div>
       {error && <p className="error-text">{error}</p>}
       <RiskQueueTable rows={rows} />
