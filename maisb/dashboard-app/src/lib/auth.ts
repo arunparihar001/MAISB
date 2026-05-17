@@ -2,12 +2,22 @@ const API_KEY_STORAGE_KEY = 'maisb_api_key'
 const ADMIN_KEY_STORAGE_KEY = 'maisb_admin_key'
 
 function encodeSecret(value: string): string {
-  return btoa(unescape(encodeURIComponent(value)))
+  const bytes = new TextEncoder().encode(value)
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
 }
 
 function decodeSecret(value: string): string {
   try {
-    return decodeURIComponent(escape(atob(value)))
+    const binary = atob(value)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    return new TextDecoder().decode(bytes)
   } catch {
     return ''
   }
