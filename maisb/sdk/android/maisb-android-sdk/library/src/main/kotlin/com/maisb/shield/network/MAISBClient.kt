@@ -148,10 +148,9 @@ class MAISBClient(
     private fun buildCertificatePinner(): CertificatePinner {
         val builder = CertificatePinner.Builder()
         val host = trimBaseUrl(config.baseUrl).toHttpUrlOrNull()?.host
+            ?: throw IllegalArgumentException("Certificate pinning requires baseUrl with protocol and host, e.g. https://api.maisb.app")
         config.certificatePins.forEach { pin ->
-            if (host != null) {
-                builder.add(host, pin)
-            }
+            builder.add(host, pin)
         }
         return builder.build()
     }

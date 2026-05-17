@@ -55,7 +55,8 @@ def check(
     -------
     ShieldDecision — check `.blocked` first before passing payload to your LLM.
     """
-    url = f"{base_url.rstrip('/')}/v1/scan"
+    normalized_base_url = base_url if "://" in base_url else f"https://{base_url}"
+    url = f"{normalized_base_url.rstrip('/')}/v1/scan"
 
     try:
         response = requests.post(
