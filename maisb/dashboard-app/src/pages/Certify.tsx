@@ -4,6 +4,7 @@ import CertifyBadge from '../components/CertifyBadge'
 import { API_BASE_URL } from '../lib/config'
 
 type CertifyPackage = 'starter' | 'standard' | 'enterprise'
+// Starter/Standard/Enterprise tiers map directly to backend certify package validation.
 
 export default function Certify() {
   const [orderId, setOrderId] = useState('')

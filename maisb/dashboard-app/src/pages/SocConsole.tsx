@@ -33,12 +33,13 @@ export default function SocConsole() {
   }
 
   useEffect(() => {
-    if (adminKeyInput) {
-      loadSocData(adminKeyInput)
+    const savedAdminKey = getAdminKey()
+    if (savedAdminKey) {
+      setAdminKeyInput(savedAdminKey)
+      loadSocData(savedAdminKey)
     } else {
       setError('Admin key is required to load SOC risk queue and cases.')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
