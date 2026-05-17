@@ -1,6 +1,7 @@
 import './styles.css'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
+import Footer from './components/Footer'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
@@ -41,12 +42,24 @@ export default function App() {
   const host = window.location.hostname
   const path = window.location.pathname
 
-  if (MARKETING_HOSTNAMES.has(host)) return marketingPage(path)
+  if (MARKETING_HOSTNAMES.has(host)) {
+    return <div className="site-shell">{marketingPage(path)}<Footer /></div>
+  }
 
   if (APP_HOSTNAMES.has(host)) {
     const isAuth = path === '/login' || path === '/signup'
-    return isAuth ? appPage(path) : <div className="layout"><Sidebar /><div className="content"><Topbar />{appPage(path)}</div></div>
+    if (isAuth) return <div className="site-shell">{appPage(path)}<Footer /></div>
+    return (
+      <div className="layout">
+        <Sidebar />
+        <div className="content">
+          <Topbar />
+          {appPage(path)}
+          <Footer />
+        </div>
+      </div>
+    )
   }
 
-  return marketingPage(path)
+  return <div className="site-shell">{marketingPage(path)}<Footer /></div>
 }

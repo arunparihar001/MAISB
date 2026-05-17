@@ -9,16 +9,20 @@ function withQuery(url: string, query?: Record<string, string | undefined>) {
   return params.toString() ? `${url}?${params}` : url
 }
 
-export async function apiGet<T>(path: string, query?: Record<string, string | undefined>): Promise<T> {
-  const response = await fetch(withQuery(`${API_BASE_URL}${path}`, query))
+export async function apiGet<T>(
+  path: string,
+  query?: Record<string, string | undefined>,
+  headers?: Record<string, string>,
+): Promise<T> {
+  const response = await fetch(withQuery(`${API_BASE_URL}${path}`, query), { headers })
   if (!response.ok) throw new Error(await response.text())
   return response.json()
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+export async function apiPost<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(headers || {}) },
     body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(await response.text())
