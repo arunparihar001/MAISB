@@ -340,3 +340,22 @@ This software, benchmark, documentation, scenario packs, taxonomy, SDK logic, an
 No license is granted for commercial use, redistribution, sublicensing, modification, model training, benchmark reuse, or derivative works without explicit written permission.
 
 See [LICENSE](LICENSE) for full terms.
+
+## Vercel dashboard-app deployment
+
+For `app.maisb.app`, configure Vercel:
+- Root Directory: `maisb/dashboard-app`
+- Framework Preset: `Vite`
+- Install Command: `npm install`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+
+## Railway environment additions
+
+Set these variables in Railway:
+- `PUBLIC_BASE_URL=https://maisb.app`
+- `APP_DASHBOARD_URL=https://app.maisb.app`
+- `API_BASE_URL=https://api.maisb.app`
+- `CERTIFY_BASE_URL=https://api.maisb.app`
+- `RESEND_API_KEY=re_xxxxx`
+- `RESEND_FROM=MAISB <noreply@maisb.app>`

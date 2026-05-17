@@ -160,6 +160,7 @@ app.add_middleware(
 )
 
 ROUTER_STATUS: Dict[str, Any] = {}
+INTERNAL_ROUTER_ERRORS: Dict[str, str] = {}
 
 
 def include_optional_router(module_name: str, label: str) -> None:
@@ -170,7 +171,8 @@ def include_optional_router(module_name: str, label: str) -> None:
         app.include_router(router)
         ROUTER_STATUS[label] = {"loaded": True, "module": module_name}
     except Exception as exc:
-        ROUTER_STATUS[label] = {"loaded": False, "module": module_name, "error": str(exc)}
+        ROUTER_STATUS[label] = {"loaded": False, "module": module_name}
+        INTERNAL_ROUTER_ERRORS[label] = str(exc)
 
 
 # Keep these optional because different repo snapshots may have slightly different files.
@@ -181,6 +183,15 @@ include_optional_router("api.phase4_soc", "phase4_soc")
 include_optional_router("api.signup", "legacy_signup")
 include_optional_router("api.certify", "legacy_certify")
 include_optional_router("api.billing", "legacy_billing")
+
+try:
+    from api.paddle_routes import router as paddle_router  # type: ignore
+
+    app.include_router(paddle_router)
+    ROUTER_STATUS["paddle_billing"] = {"loaded": True, "module": "api.paddle_routes"}
+except Exception as exc:
+    ROUTER_STATUS["paddle_billing"] = {"loaded": False, "module": "api.paddle_routes"}
+    INTERNAL_ROUTER_ERRORS["paddle_billing"] = str(exc)
 
 # ── Database helpers ─────────────────────────────────────────────────────────
 
@@ -570,6 +581,11 @@ def safe_call_phase2_trace(body: ScanRequestBody, result: Any, trace_id: str, ev
 
 @app.get("/health", tags=["System"])
 def health() -> Dict[str, Any]:
+    optional_legacy_modules = {
+        key: value["loaded"]
+        for key, value in ROUTER_STATUS.items()
+        if key.startswith("legacy_")
+    }
     return {
         "status": "ok",
         "version": API_VERSION,
@@ -580,8 +596,23 @@ def health() -> Dict[str, Any]:
         "commercial": True,
         "self_serve_signup": True,
         "certify": True,
-        "pipeline_import_error": PIPELINE_IMPORT_ERROR,
+        "pipeline_ready": PIPELINE_IMPORT_ERROR is None,
+        "pipeline_fallback_active": PIPELINE_IMPORT_ERROR is not None,
+        "optional_legacy_modules": optional_legacy_modules,
         "routers": ROUTER_STATUS,
+    }
+
+
+@app.get("/v1/admin/diagnostics/routers", tags=["System"])
+def admin_router_diagnostics(
+    admin_key: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    require_admin(admin_key, authorization)
+    return {
+        "routers": ROUTER_STATUS,
+        "internal_router_errors": INTERNAL_ROUTER_ERRORS,
+        "pipeline_import_error": PIPELINE_IMPORT_ERROR,
     }
 
 
