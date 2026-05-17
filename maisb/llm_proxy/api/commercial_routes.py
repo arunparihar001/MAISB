@@ -34,7 +34,10 @@ DEFAULT_TENANT_ID = os.environ.get("DEFAULT_TENANT_ID", "default")
 COMMERCIAL_VERSION = "2.5.0"
 FREE_TIER_MONTHLY_LIMIT = int(os.environ.get("FREE_TIER_MONTHLY_LIMIT", "1000"))
 PRO_TIER_MONTHLY_LIMIT = int(os.environ.get("PRO_TIER_MONTHLY_LIMIT", "50000"))
-CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", "https://maisb-production.up.railway.app")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://maisb.app")
+APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
+CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
 
 router = APIRouter(tags=["Commercial - Dashboard, Signup, Billing, Certify"])
 
@@ -407,13 +410,14 @@ def public_customer_dashboard(api_key: str = Query(...)) -> Dict[str, Any]:
         "usage": usage,
         "quick_start": {
             "python": "pip install maisb-shield",
-            "endpoint": f"{CERTIFY_BASE_URL}/v1/scan",
+            "endpoint": f"{API_BASE_URL}/v1/scan",
             "channels": ["clipboard", "qr", "notification", "deep_link", "webview", "share_intent"],
         },
         "links": {
-            "api_docs": f"{CERTIFY_BASE_URL}/docs",
-            "phase3_dashboard": f"{CERTIFY_BASE_URL}/dashboard",
-            "soc_console": f"{CERTIFY_BASE_URL}/soc",
+            "public_site": PUBLIC_BASE_URL,
+            "api_docs": f"{API_BASE_URL}/docs",
+            "dashboard": APP_DASHBOARD_URL,
+            "soc_console": f"{APP_DASHBOARD_URL}/soc",
         },
     }
 

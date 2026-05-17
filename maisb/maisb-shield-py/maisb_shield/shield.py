@@ -16,9 +16,9 @@ import requests
 from dataclasses import dataclass
 
 # ──────────────────────────────────────────────────
-# Replace this URL after Railway deployment
+# Default production API base URL
 # ──────────────────────────────────────────────────
-DEFAULT_BASE_URL = "maisb-production.up.railway.app"
+DEFAULT_BASE_URL = "https://api.maisb.app"
 
 
 @dataclass
@@ -55,7 +55,8 @@ def check(
     -------
     ShieldDecision — check `.blocked` first before passing payload to your LLM.
     """
-    url = f"{base_url.rstrip('/')}/v1/scan"
+    normalized_base_url = base_url if "://" in base_url else f"https://{base_url}"
+    url = f"{normalized_base_url.rstrip('/')}/v1/scan"
 
     try:
         response = requests.post(

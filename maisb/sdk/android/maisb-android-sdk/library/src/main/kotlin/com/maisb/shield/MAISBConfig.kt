@@ -6,7 +6,7 @@ package com.maisb.shield
 data class MAISBConfig(
     // Required
     val apiKey: String,
-    val baseUrl: String = "https://maisb-production.up.railway.app",
+    val baseUrl: String = "https://api.maisb.app",
 
     // Enterprise / tenant configuration
     val tenantId: String = "default",

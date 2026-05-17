@@ -158,13 +158,19 @@ Start Command: uvicorn api.scan_api:app --host 0.0.0.0 --port $PORT
 After deploy:
 
 ```powershell
-Invoke-RestMethod https://maisb-production.up.railway.app/v1/phase3/health | ConvertTo-Json -Depth 10
+Invoke-RestMethod https://api.maisb.app/v1/phase3/health | ConvertTo-Json -Depth 10
 ```
 
 Then open:
 
 ```text
-https://maisb-production.up.railway.app/dashboard
+https://app.maisb.app
 ```
 
 Use a real Railway environment variable for ADMIN_KEY before public demos.
+
+Customer-facing production URLs should use:
+
+- Public site: https://maisb.app
+- Dashboard: https://app.maisb.app
+- API: https://api.maisb.app

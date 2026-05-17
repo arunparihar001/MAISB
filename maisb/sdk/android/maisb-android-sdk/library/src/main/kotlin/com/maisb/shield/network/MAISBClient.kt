@@ -19,6 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -146,8 +147,10 @@ class MAISBClient(
 
     private fun buildCertificatePinner(): CertificatePinner {
         val builder = CertificatePinner.Builder()
+        val host = trimBaseUrl(config.baseUrl).toHttpUrlOrNull()?.host
+            ?: throw IllegalArgumentException("Certificate pinning requires baseUrl with protocol and host, e.g. https://api.maisb.app")
         config.certificatePins.forEach { pin ->
-            builder.add("maisb-production.up.railway.app", pin)
+            builder.add(host, pin)
         }
         return builder.build()
     }

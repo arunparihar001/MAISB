@@ -185,12 +185,14 @@ init_db()
 app = FastAPI(title="MAISB Scan API", version="1.0.0")
 
 # Dashboard / browser CORS support
-# This allows your hosted dashboard and local dev servers to call the Railway API.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://maisb-dashboard.vercel.app",
-        "https://maisb-dashboard-static.vercel.app",
+        "https://maisb.app",
+        "https://www.maisb.app",
+        "https://app.maisb.app",
+        "https://api.maisb.app",
+        "https://maisb-dashboard-static.vercel.app",  # legacy Vercel dashboard fallback
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8000",

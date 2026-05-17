@@ -8,6 +8,10 @@ This SDK follows the Claude-provided Android SDK structure and connects to the l
 - `POST /v1/sdk/mobile/telemetry` for Phase 4 mobile telemetry
 - `GET /health` for backend health checks
 
+Production API base URL:
+
+- `https://api.maisb.app`
+
 ## Install inside this repo
 
 Place this folder at:
@@ -49,6 +53,7 @@ class MyApplication : Application() {
             this,
             MAISBConfig(
                 apiKey = "maisb_your_api_key_here",
+                baseUrl = "https://api.maisb.app",
                 tenantId = "default",
                 telemetryEnabled = true,
                 debug = BuildConfig.DEBUG
