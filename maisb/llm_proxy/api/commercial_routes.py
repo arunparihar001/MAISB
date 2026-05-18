@@ -16,9 +16,14 @@ import hashlib
 import html
 import io
 import json
+import logging
 import os
+import re
 import secrets
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
@@ -38,6 +43,15 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://maisb.app")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
+LOGGER = logging.getLogger(__name__)
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "")
+RESEND_NOTIFY_EMAILS = [email.strip() for email in os.environ.get("RESEND_NOTIFY_EMAILS", "").split(",") if email.strip()]
+PADDLE_ENABLED = os.environ.get("PADDLE_ENABLED", "false").lower() == "true"
+PADDLE_CHECKOUT_URL = os.environ.get("PADDLE_CHECKOUT_URL", "")
+PADDLE_PRICE_ID_PRO = os.environ.get("PADDLE_PRICE_ID_PRO", "")
+PADDLE_PRICE_ID_ENTERPRISE = os.environ.get("PADDLE_PRICE_ID_ENTERPRISE", "")
+PADDLE_PRICE_ID_CERTIFY = os.environ.get("PADDLE_PRICE_ID_CERTIFY", "")
 
 router = APIRouter(tags=["Commercial - Dashboard, Signup, Billing, Certify"])
 
@@ -68,6 +82,71 @@ def jload(value: Any, default: Any = None) -> Any:
         return json.loads(value)
     except Exception:
         return default if default is not None else {}
+
+
+def resend_enabled() -> bool:
+    return bool(RESEND_API_KEY and RESEND_FROM_EMAIL)
+
+
+def is_valid_email(value: str) -> bool:
+    return bool(re.fullmatch(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", value.strip()))
+
+
+def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> bool:
+    if not resend_enabled() or not to_emails:
+        return False
+    payload = {
+        "from": RESEND_FROM_EMAIL,
+        "to": to_emails,
+        "subject": subject,
+        "html": html_body,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):
+            return True
+    except urllib.error.URLError as exc:
+        LOGGER.warning("Resend delivery failed: %s", exc)
+        return False
+
+
+def notify_commercial_ops(subject: str, html_body: str) -> bool:
+    return send_resend_email(RESEND_NOTIFY_EMAILS, subject, html_body)
+
+
+def paddle_price_id_for_plan(plan: str) -> str:
+    mapping = {
+        "pro": PADDLE_PRICE_ID_PRO,
+        "enterprise": PADDLE_PRICE_ID_ENTERPRISE,
+        "certify": PADDLE_PRICE_ID_CERTIFY,
+    }
+    return mapping.get(plan, "")
+
+
+def build_paddle_checkout_url(email: str, plan: str, success_url: Optional[str], cancel_url: Optional[str]) -> Optional[str]:
+    if not PADDLE_ENABLED or not PADDLE_CHECKOUT_URL:
+        return None
+    if not is_valid_email(email):
+        return None
+    query: Dict[str, str] = {"email": email, "plan": plan}
+    price_id = paddle_price_id_for_plan(plan)
+    if price_id:
+        query["price_id"] = price_id
+    if success_url:
+        query["success_url"] = success_url
+    if cancel_url:
+        query["cancel_url"] = cancel_url
+    query["passthrough"] = jdump({"plan": plan, "email": email, "source": "maisb_dashboard"})
+    glue = "&" if "?" in PADDLE_CHECKOUT_URL else "?"
+    return f"{PADDLE_CHECKOUT_URL}{glue}{urllib.parse.urlencode(query)}"
 
 
 def sha256(value: str) -> str:
@@ -220,6 +299,13 @@ class BillingRequest(BaseModel):
     provider: str = Field("manual_invoice", pattern="^(manual_invoice|paddle|lemon_squeezy|lemonsqueezy|bank_transfer|wise)$")
     notes: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PaddleCheckoutRequest(BaseModel):
+    email: str
+    plan: str = Field("pro", pattern="^(pro|enterprise|certify)$")
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
 
 
 class CertifyStartRequest(BaseModel):
@@ -381,6 +467,10 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
     )
     conn.commit()
     conn.close()
+    notify_commercial_ops(
+        "MAISB new public signup",
+        f"<p>New signup: <b>{html.escape(body.email)}</b> ({html.escape(body.company or 'n/a')})</p><p>Plan: free</p>",
+    )
     return {
         "created": True,
         "signup_id": signup_id,
@@ -390,6 +480,7 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
         "monthly_limit": FREE_TIER_MONTHLY_LIMIT,
         "tenant_id": body.tenant_id,
         "warning": "Copy this API key now. Do not expose production keys in GitHub, screenshots, or reports.",
+        "email_delivery": "configured" if resend_enabled() else "disabled",
     }
 
 
@@ -427,6 +518,8 @@ def public_plans() -> Dict[str, Any]:
     return {
         "billing_mode": "manual_or_merchant_of_record",
         "stripe_direct_enabled": False,
+        "paddle_enabled": PADDLE_ENABLED,
+        "paddle_checkout_endpoint": "/v1/billing/paddle/checkout-link" if PADDLE_ENABLED else None,
         "reason": "Stripe direct account flow is intentionally not used in this build. Use manual invoice, Paddle, or Lemon Squeezy style Merchant-of-Record flow.",
         "plans": [
             {
@@ -477,6 +570,15 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    notify_commercial_ops(
+        "MAISB billing upgrade request",
+        (
+            f"<p>Request ID: <b>{request_id}</b></p>"
+            f"<p>Email: {html.escape(body.email)}</p>"
+            f"<p>Plan: {html.escape(body.plan)}</p>"
+            f"<p>Provider: {html.escape(provider)}</p>"
+        ),
+    )
     return {
         "request_id": request_id,
         "status": "requested",
@@ -484,6 +586,44 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
         "provider": provider,
         "next_step": "Manual commercial review. Send invoice/payment link using your Pakistan-compatible provider.",
         "stripe_direct_enabled": False,
+    }
+
+
+@router.post("/v1/billing/paddle/checkout-link")
+def billing_paddle_checkout_link(body: PaddleCheckoutRequest) -> Dict[str, Any]:
+    checkout_url = build_paddle_checkout_url(body.email, body.plan, body.success_url, body.cancel_url)
+    if not checkout_url:
+        raise HTTPException(status_code=503, detail="Paddle checkout is not configured")
+    request_id = f"bill_{secrets.token_hex(8)}"
+    now = utcnow()
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO billing_requests
+        (request_id, email, company, plan, provider, status, notes, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'paddle', 'checkout_link_created', ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            body.email,
+            None,
+            body.plan,
+            "Paddle checkout link generated",
+            jdump({"checkout_url_present": True, "success_url": body.success_url, "cancel_url": body.cancel_url}),
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    notify_commercial_ops(
+        "MAISB paddle checkout link generated",
+        f"<p>Request ID: <b>{request_id}</b></p><p>Email: {html.escape(body.email)}</p><p>Plan: {html.escape(body.plan)}</p>",
+    )
+    return {
+        "request_id": request_id,
+        "provider": "paddle",
+        "checkout_url": checkout_url,
     }
 
 
