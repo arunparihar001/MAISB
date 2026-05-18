@@ -164,7 +164,7 @@ def verify_paddle_signature(raw_body: bytes, signature_header: Optional[str]) ->
 
 
 def sanitize_for_url(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_\\-]", "", value or "")
+    return re.sub(r"[^a-zA-Z0-9_-]", "", value or "")
 
 
 def get_email_for_api_key(api_key: Optional[str]) -> Optional[str]:
