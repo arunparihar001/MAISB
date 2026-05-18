@@ -13,12 +13,19 @@
 
 import datetime as dt
 import hashlib
+import hmac
 import html
 import io
 import json
+import logging
 import os
+import re
 import secrets
 import sqlite3
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
@@ -38,6 +45,34 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://maisb.app")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
+
+LOGGER = logging.getLogger(__name__)
+
+# Resend email notifications. Supports both the current Railway variable names
+# and older PR aliases so deployment does not break when env names differ.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM = os.environ.get("RESEND_FROM") or os.environ.get("RESEND_FROM_EMAIL") or "MAISB <hello@updates.maisb.app>"
+RESEND_REPLY_TO = os.environ.get("RESEND_REPLY_TO", "")
+SALES_NOTIFY_EMAIL = os.environ.get("SALES_NOTIFY_EMAIL", "")
+SECURITY_NOTIFY_EMAIL = os.environ.get("SECURITY_NOTIFY_EMAIL", "")
+RESEND_NOTIFY_EMAILS = [
+    email.strip()
+    for email in os.environ.get("RESEND_NOTIFY_EMAILS", "").split(",")
+    if email.strip()
+]
+
+# Paddle / merchant-of-record billing. Checkout can run in link/config mode,
+# while account upgrade is trusted only after signed webhook confirmation.
+PADDLE_ENV = os.environ.get("PADDLE_ENV", "sandbox")
+PADDLE_API_KEY = os.environ.get("PADDLE_API_KEY", "")
+PADDLE_WEBHOOK_SECRET = os.environ.get("PADDLE_WEBHOOK_SECRET", "")
+PADDLE_PRO_PRICE_ID = os.environ.get("PADDLE_PRO_PRICE_ID") or os.environ.get("PADDLE_PRICE_ID_PRO", "")
+PADDLE_CERTIFY_PRICE_ID = os.environ.get("PADDLE_CERTIFY_PRICE_ID") or os.environ.get("PADDLE_PRICE_ID_CERTIFY", "")
+PADDLE_CHECKOUT_URL = os.environ.get("PADDLE_CHECKOUT_URL", "")
+PADDLE_ENABLED = os.environ.get(
+    "PADDLE_ENABLED",
+    "true" if (PADDLE_API_KEY or PADDLE_CHECKOUT_URL or PADDLE_PRO_PRICE_ID or PADDLE_CERTIFY_PRICE_ID) else "false",
+).lower() == "true"
 
 router = APIRouter(tags=["Commercial - Dashboard, Signup, Billing, Certify"])
 
@@ -86,6 +121,259 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
     return row is not None
 
+
+# ── Email + Paddle helpers ───────────────────────────────────────────────────
+
+def is_valid_email(value: str) -> bool:
+    return bool(re.fullmatch(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", (value or "").strip()))
+
+
+def resend_enabled() -> bool:
+    return bool(RESEND_API_KEY and RESEND_FROM)
+
+
+def resend_recipients(*emails: Optional[str]) -> List[str]:
+    seen = set()
+    output: List[str] = []
+    for email in list(emails) + RESEND_NOTIFY_EMAILS:
+        if not email:
+            continue
+        clean = email.strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            output.append(clean)
+    return output
+
+
+def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> bool:
+    recipients = [email for email in to_emails if email]
+    if not resend_enabled() or not recipients:
+        return False
+    payload: Dict[str, Any] = {
+        "from": RESEND_FROM,
+        "to": recipients,
+        "subject": subject,
+        "html": html_body,
+    }
+    if RESEND_REPLY_TO:
+        payload["reply_to"] = RESEND_REPLY_TO
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8):
+            return True
+    except Exception as exc:  # fail-safe: never break customer flows over email
+        LOGGER.warning("Resend delivery failed: %s", exc)
+        return False
+
+
+def send_admin_notification(subject: str, message: str) -> bool:
+    recipients = resend_recipients(SALES_NOTIFY_EMAIL, SECURITY_NOTIFY_EMAIL)
+    return send_resend_email(recipients, subject, f"<p>{html.escape(message)}</p>")
+
+
+def send_api_key_created_email(email: str, raw_api_key: str, api_key_masked: str) -> bool:
+    body = (
+        "<p>Your MAISB Shield API key was created.</p>"
+        f"<p><b>Key shown once:</b></p><pre>{html.escape(raw_api_key)}</pre>"
+        f"<p>Masked key: <code>{html.escape(api_key_masked)}</code></p>"
+        "<p>Keep this key secret. Do not commit it to GitHub, screenshots, mobile apps, or public reports.</p>"
+        f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"
+    )
+    return send_resend_email([email], "Your MAISB Shield API key", body)
+
+
+def send_billing_request_email(email: str, plan: str, request_id: str, company: Optional[str] = None) -> bool:
+    body = (
+        "<p>We received your MAISB billing request.</p>"
+        f"<p>Request ID: <b>{html.escape(request_id)}</b><br/>"
+        f"Plan: {html.escape(plan)}<br/>Company: {html.escape(company or 'N/A')}</p>"
+    )
+    send_admin_notification("New MAISB billing request", f"{request_id} · {email} · {plan}")
+    return send_resend_email([email], "MAISB billing request received", body)
+
+
+def send_certify_started_email(email: str, order_id: str, company: str) -> bool:
+    report_url = f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/report.pdf"
+    badge_url = f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/badge.svg"
+    body = (
+        "<p>Your MAISB Certify order has been created.</p>"
+        f"<p>Order: <b>{html.escape(order_id)}</b><br/>Company: {html.escape(company)}</p>"
+        f"<p>Report URL: <a href='{html.escape(report_url)}'>{html.escape(report_url)}</a></p>"
+        f"<p>Badge URL: <a href='{html.escape(badge_url)}'>{html.escape(badge_url)}</a></p>"
+    )
+    send_admin_notification("New MAISB Certify order", f"{order_id} · {email} · {company}")
+    return send_resend_email([email], "MAISB Certify order started", body)
+
+
+def send_certify_report_ready_email(email: str, order_id: str, report_url: str, badge_url: str) -> bool:
+    body = (
+        "<p>Your MAISB Certify report is ready.</p>"
+        f"<p>Order: <b>{html.escape(order_id)}</b></p>"
+        f"<p><a href='{html.escape(report_url)}'>Download report PDF</a></p>"
+        f"<p><a href='{html.escape(badge_url)}'>Open badge SVG</a></p>"
+    )
+    return send_resend_email([email], "MAISB Certify report ready", body)
+
+
+def paddle_price_id_for_plan(plan: str) -> str:
+    if plan == "certify":
+        return PADDLE_CERTIFY_PRICE_ID
+    return PADDLE_PRO_PRICE_ID
+
+
+def paddle_plan_for_price(price_id: str) -> str:
+    if price_id and PADDLE_CERTIFY_PRICE_ID and price_id == PADDLE_CERTIFY_PRICE_ID:
+        return "certify"
+    return "pro"
+
+
+def paddle_checkout_config(email: str, plan: str, company: Optional[str] = None, success_url: Optional[str] = None, cancel_url: Optional[str] = None) -> Dict[str, Any]:
+    price_id = paddle_price_id_for_plan(plan)
+    success = success_url or f"{APP_DASHBOARD_URL}/billing?checkout=success"
+    cancel = cancel_url or f"{APP_DASHBOARD_URL}/billing?checkout=cancelled"
+    if not PADDLE_ENABLED or not price_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Paddle checkout is not configured. Add Paddle env vars or use manual billing request.",
+        )
+    checkout: Dict[str, Any] = {
+        "environment": PADDLE_ENV,
+        "price_id": price_id,
+        "plan": plan,
+        "customer": {"email": email, "company": company},
+        "success_url": success,
+        "cancel_url": cancel,
+        "custom_data": {"product": "maisb-shield", "plan": plan, "email": email},
+    }
+    if PADDLE_CHECKOUT_URL:
+        query = {
+            "email": email,
+            "plan": plan,
+            "price_id": price_id,
+            "success_url": success,
+            "cancel_url": cancel,
+            "passthrough": jdump({"plan": plan, "email": email, "source": "maisb_dashboard"}),
+        }
+        glue = "&" if "?" in PADDLE_CHECKOUT_URL else "?"
+        checkout["checkout_url"] = f"{PADDLE_CHECKOUT_URL}{glue}{urllib.parse.urlencode(query)}"
+    return checkout
+
+
+def parse_paddle_signature(signature_header: str) -> Dict[str, str]:
+    parts: Dict[str, str] = {}
+    for part in (signature_header or "").split(";"):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            parts[key.strip()] = value.strip()
+    return parts
+
+
+def verify_paddle_signature(raw_body: bytes, signature_header: Optional[str], tolerance_seconds: int = 300) -> bool:
+    if not PADDLE_WEBHOOK_SECRET:
+        return False
+    parts = parse_paddle_signature(signature_header or "")
+    ts = parts.get("ts", "")
+    h1 = parts.get("h1", "")
+    if not ts or not h1:
+        return False
+    try:
+        timestamp = int(ts)
+        if abs(time.time() - timestamp) > tolerance_seconds:
+            return False
+    except Exception:
+        return False
+    signed = ts.encode("utf-8") + b":" + raw_body
+    digest = hmac.new(PADDLE_WEBHOOK_SECRET.encode("utf-8"), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, h1)
+
+
+def extract_paddle_context(payload: Dict[str, Any]) -> Dict[str, str]:
+    data = payload.get("data") or {}
+    customer = data.get("customer") or {}
+    custom = data.get("custom_data") or {}
+    items = data.get("items") or []
+    price_id = ""
+    if isinstance(items, list) and items:
+        first = items[0] or {}
+        price = first.get("price") or {}
+        price_id = str(price.get("id") or first.get("price_id") or "")
+    if not price_id:
+        price_id = str((data.get("price") or {}).get("id") or data.get("price_id") or "")
+    email = str(customer.get("email") or data.get("customer_email") or data.get("email") or custom.get("email") or "")
+    return {
+        "event_id": str(payload.get("event_id") or payload.get("id") or data.get("id") or ""),
+        "event_type": str(payload.get("event_type") or payload.get("type") or "unknown"),
+        "email": email,
+        "price_id": price_id,
+        "plan": str(custom.get("plan") or paddle_plan_for_price(price_id)),
+        "customer_id": str(data.get("customer_id") or customer.get("id") or ""),
+        "subscription_id": str(data.get("subscription_id") or data.get("id") or ""),
+    }
+
+
+def store_paddle_event(event_id: str, event_type: str, payload: Dict[str, Any]) -> bool:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO paddle_webhook_events(event_id,event_type,payload_json,received_at) VALUES(?,?,?,?)",
+            (event_id, event_type, jdump(payload), utcnow()),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def upsert_paddle_subscription(email: str, plan: str, status: str, customer_id: str, subscription_id: str, price_id: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO paddle_subscriptions(email,plan,status,customer_id,subscription_id,price_id,updated_at)
+        VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT(email) DO UPDATE SET
+            plan=excluded.plan,
+            status=excluded.status,
+            customer_id=excluded.customer_id,
+            subscription_id=excluded.subscription_id,
+            price_id=excluded.price_id,
+            updated_at=excluded.updated_at
+        """,
+        (email, plan, status, customer_id, subscription_id, price_id, utcnow()),
+    )
+    if status == "active":
+        conn.execute("UPDATE api_keys SET plan=? WHERE lower(email)=lower(?)", (plan, email))
+    conn.commit()
+    conn.close()
+
+
+def paddle_status_for(email: Optional[str] = None, api_key: Optional[str] = None) -> Dict[str, Any]:
+    conn = get_conn()
+    resolved_email = email
+    if not resolved_email and api_key:
+        row = conn.execute("SELECT email FROM api_keys WHERE key=?", (api_key,)).fetchone()
+        resolved_email = row["email"] if row else None
+    sub = None
+    if resolved_email:
+        sub = conn.execute("SELECT * FROM paddle_subscriptions WHERE lower(email)=lower(?)", (resolved_email,)).fetchone()
+    conn.close()
+    return {
+        "email": resolved_email,
+        "provider": "paddle",
+        "plan": sub["plan"] if sub else "free",
+        "status": sub["status"] if sub else "inactive",
+        "price_id": sub["price_id"] if sub else None,
+        "updated_at": sub["updated_at"] if sub else None,
+    }
 
 def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -222,6 +510,15 @@ class BillingRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+
+
+class PaddleCheckoutRequest(BaseModel):
+    email: str
+    company: Optional[str] = None
+    plan: str = Field("pro", pattern="^(pro|certify)$")
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
 class CertifyStartRequest(BaseModel):
     email: str
     company: str
@@ -328,6 +625,8 @@ def commercial_health() -> Dict[str, Any]:
             "stripe_direct_billing": False,
             "manual_invoice_billing": True,
             "merchant_of_record_ready": True,
+            "paddle_webhook_billing": True,
+            "resend_notifications": resend_enabled(),
             "certify_pdf_report": True,
             "certify_svg_badge": True,
         },
@@ -340,19 +639,22 @@ def commercial_health() -> Dict[str, Any]:
     }
 
 
-@router.post("/v1/public/signup")
+@router.post("/v1/public/signup", tags=["Public Signup"])
 def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]:
     if not PUBLIC_SIGNUP_ENABLED:
         raise HTTPException(status_code=403, detail="Public signup is currently disabled")
     if REQUIRE_SIGNUP_INVITE_CODE and body.invite_code != SIGNUP_INVITE_CODE:
         raise HTTPException(status_code=403, detail="Valid invite code required")
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail="Valid email required")
 
     conn = get_conn()
     if signup_count_for_email_today(conn, body.email) >= 3:
         conn.close()
         raise HTTPException(status_code=429, detail="Daily signup limit reached for this email")
 
-    raw_key = create_public_api_key(body.email, body.company)
+    raw_key = create_public_api_key()
+    masked = mask_key(raw_key)
     now = utcnow()
     conn.execute(
         "INSERT INTO api_keys (key, plan, scan_count, email, created) VALUES (?, 'free', 0, ?, ?)",
@@ -373,7 +675,7 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
             body.name,
             body.use_case,
             body.tenant_id,
-            mask_key(raw_key),
+            masked,
             ip_hash,
             request.headers.get("user-agent"),
             now,
@@ -381,15 +683,20 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
     )
     conn.commit()
     conn.close()
+
+    send_api_key_created_email(body.email, raw_key, masked)
+    send_admin_notification("New MAISB public signup", f"{signup_id} · {body.email} · {body.company or 'no company'}")
+
     return {
         "created": True,
         "signup_id": signup_id,
         "api_key": raw_key,
-        "api_key_masked": mask_key(raw_key),
+        "api_key_masked": masked,
         "plan": "free",
         "monthly_limit": FREE_TIER_MONTHLY_LIMIT,
         "tenant_id": body.tenant_id,
         "warning": "Copy this API key now. Do not expose production keys in GitHub, screenshots, or reports.",
+        "email_delivery": "configured" if resend_enabled() else "disabled",
     }
 
 
@@ -427,6 +734,8 @@ def public_plans() -> Dict[str, Any]:
     return {
         "billing_mode": "manual_or_merchant_of_record",
         "stripe_direct_enabled": False,
+        "paddle_enabled": PADDLE_ENABLED,
+        "paddle_checkout_endpoint": "/v1/billing/paddle/checkout-session",
         "reason": "Stripe direct account flow is intentionally not used in this build. Use manual invoice, Paddle, or Lemon Squeezy style Merchant-of-Record flow.",
         "plans": [
             {
@@ -461,8 +770,10 @@ def public_plans() -> Dict[str, Any]:
     }
 
 
-@router.post("/v1/billing/upgrade-request")
+@router.post("/v1/billing/upgrade-request", tags=["Billing"])
 def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail="Valid billing email required")
     provider = "lemon_squeezy" if body.provider == "lemonsqueezy" else body.provider
     request_id = f"bill_{secrets.token_hex(8)}"
     now = utcnow()
@@ -477,20 +788,111 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    send_billing_request_email(body.email, body.plan, request_id, body.company)
     return {
         "request_id": request_id,
         "status": "requested",
         "plan": body.plan,
         "provider": provider,
-        "next_step": "Manual commercial review. Send invoice/payment link using your Pakistan-compatible provider.",
+        "next_step": "Manual commercial review or merchant-of-record checkout. Do not treat frontend checkout success as provisioning.",
         "stripe_direct_enabled": False,
+        "paddle_checkout_endpoint": "/v1/billing/paddle/checkout-session",
     }
 
 
-# ── Certify endpoints ────────────────────────────────────────────────────────
 
-@router.post("/v1/commercial/certify/start")
+@router.post("/v1/billing/paddle/checkout-session", tags=["Billing"])
+def paddle_checkout_session(body: PaddleCheckoutRequest) -> Dict[str, Any]:
+    checkout = paddle_checkout_config(body.email, body.plan, body.company, body.success_url, body.cancel_url)
+    request_id = f"paddle_{secrets.token_hex(8)}"
+    now = utcnow()
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO billing_requests
+        (request_id, email, company, plan, provider, status, notes, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'paddle', 'checkout_session_created', ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            body.email,
+            body.company,
+            body.plan,
+            "Paddle checkout session created; awaiting signed webhook confirmation.",
+            jdump({"checkout_url_present": bool(checkout.get("checkout_url")), "price_id": checkout.get("price_id")}),
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    send_admin_notification("MAISB Paddle checkout created", f"{request_id} · {body.email} · {body.plan}")
+    return {
+        "request_id": request_id,
+        "provider": "paddle",
+        "provisioning": "pending_webhook_confirmation",
+        "checkout": checkout,
+        "checkout_url": checkout.get("checkout_url"),
+    }
+
+
+@router.post("/v1/billing/paddle/checkout-link", tags=["Billing"])
+def paddle_checkout_link_compat(body: PaddleCheckoutRequest) -> Dict[str, Any]:
+    """Backward-compatible alias for older dashboard code."""
+    return paddle_checkout_session(body)
+
+
+@router.post("/v1/billing/paddle/webhook", tags=["Billing"])
+async def paddle_webhook(request: Request) -> Dict[str, Any]:
+    raw = await request.body()
+    signature = request.headers.get("Paddle-Signature")
+    if not verify_paddle_signature(raw, signature):
+        raise HTTPException(status_code=401, detail="Invalid Paddle signature")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Paddle event JSON")
+    ctx = extract_paddle_context(payload)
+    if not ctx["event_id"]:
+        raise HTTPException(status_code=400, detail="Missing Paddle event id")
+    inserted = store_paddle_event(ctx["event_id"], ctx["event_type"], payload)
+    if not inserted:
+        return {"ok": True, "duplicate": True, "event_id": ctx["event_id"]}
+
+    active_events = {"transaction.completed", "subscription.created", "subscription.updated", "subscription.resumed"}
+    inactive_events = {"subscription.canceled", "subscription.paused"}
+    if ctx["email"] and ctx["event_type"] in active_events:
+        upsert_paddle_subscription(
+            email=ctx["email"],
+            plan=ctx["plan"],
+            status="active",
+            customer_id=ctx["customer_id"],
+            subscription_id=ctx["subscription_id"] or ctx["event_id"],
+            price_id=ctx["price_id"],
+        )
+        send_admin_notification("Paddle billing activated", f"{ctx['email']} · {ctx['plan']} · {ctx['event_type']}")
+    elif ctx["email"] and ctx["event_type"] in inactive_events:
+        upsert_paddle_subscription(
+            email=ctx["email"],
+            plan=ctx["plan"],
+            status="inactive",
+            customer_id=ctx["customer_id"],
+            subscription_id=ctx["subscription_id"] or ctx["event_id"],
+            price_id=ctx["price_id"],
+        )
+    return {"ok": True, "event_id": ctx["event_id"], "event_type": ctx["event_type"], "processed": True}
+
+
+@router.get("/v1/billing/paddle/status", tags=["Billing"])
+def paddle_billing_status(email: Optional[str] = Query(None), api_key: Optional[str] = Query(None)) -> Dict[str, Any]:
+    return paddle_status_for(email=email, api_key=api_key)
+
+# ── Certify endpoints# ── Certify endpoints ────────────────────────────────────────────────────────
+
+@router.post("/v1/commercial/certify/start", tags=["MAISB Certify"])
 def certify_start(body: CertifyStartRequest) -> Dict[str, Any]:
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail="Valid email required")
     order_id = f"cert_{dt.datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}"
     now = utcnow()
     conn = get_conn()
@@ -514,6 +916,7 @@ def certify_start(body: CertifyStartRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    send_certify_started_email(body.email, order_id, body.company)
     return {
         "order_id": order_id,
         "status": "assessment_requested",
@@ -522,9 +925,8 @@ def certify_start(body: CertifyStartRequest) -> Dict[str, Any]:
         "report_html_url": f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/report.html",
         "report_pdf_url": f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/report.pdf",
         "badge_svg_url": f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/badge.svg",
-        "next_step": "Run MAISB benchmark, review evidence, then use admin complete-demo endpoint or replace with real scoring pipeline.",
+        "next_step": "Run MAISB benchmark, review evidence, then complete scoring with real benchmark results.",
     }
-
 
 @router.get("/v1/commercial/certify/orders/{order_id}")
 def certify_get_order(order_id: str) -> Dict[str, Any]:
@@ -536,7 +938,7 @@ def certify_get_order(order_id: str) -> Dict[str, Any]:
     return {"order": dict(row), "report": default_certify_report(row)}
 
 
-@router.post("/v1/commercial/certify/orders/{order_id}/complete-demo")
+@router.post("/v1/commercial/certify/orders/{order_id}/complete-demo", tags=["MAISB Certify"])
 def certify_complete_demo(
     order_id: str,
     body: CertifyCompleteRequest,
@@ -556,6 +958,7 @@ def certify_complete_demo(
         "issued_at": utcnow(),
     }
     conn = get_conn()
+    row = conn.execute("SELECT email FROM certify_orders WHERE order_id=?", (order_id,)).fetchone()
     cur = conn.execute(
         """
         UPDATE certify_orders
@@ -568,6 +971,14 @@ def certify_complete_demo(
     conn.close()
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Certify order not found")
+    if row and row["email"]:
+        send_certify_report_ready_email(
+            row["email"],
+            order_id,
+            f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/report.pdf",
+            f"{CERTIFY_BASE_URL}/v1/commercial/certify/orders/{order_id}/badge.svg",
+        )
+        send_admin_notification("MAISB Certify report ready", f"{order_id} · grade {grade} · score {body.score}")
     return {"updated": True, "order_id": order_id, "report": report}
 
 
