@@ -35,6 +35,7 @@ import sqlite3
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -544,7 +545,7 @@ def verify_paddle_signature(raw_body: bytes, signature_header: Optional[str]) ->
     h1 = parsed.get("h1")
     if not ts or not h1:
         return False
-    signed_payload = f"{ts}:{raw_body.decode('utf-8')}".encode("utf-8")
+    signed_payload = f"{ts}:{raw_body.decode('utf-8', errors='replace')}".encode("utf-8")
     expected = hmac.new(PADDLE_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
     return secrets.compare_digest(expected, h1)
 
@@ -1026,7 +1027,7 @@ def paddle_checkout_session(body: PaddleCheckoutRequest) -> Dict[str, Any]:
         }
     checkout_url = (
         f"https://checkout.paddle.com/checkout/{sanitize_for_url(PADDLE_VENDOR_ID)}/"
-        f"{sanitize_for_url(price_id)}?passthrough={request_id}"
+        f"{sanitize_for_url(price_id)}?passthrough={urllib.parse.quote(request_id, safe='')}"
     )
     return {
         "configured": True,
