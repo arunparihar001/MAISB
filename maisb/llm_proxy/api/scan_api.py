@@ -545,7 +545,11 @@ def verify_paddle_signature(raw_body: bytes, signature_header: Optional[str]) ->
     h1 = parsed.get("h1")
     if not ts or not h1:
         return False
-    signed_payload = f"{ts}:{raw_body.decode('utf-8', errors='replace')}".encode("utf-8")
+    try:
+        body_text = raw_body.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    signed_payload = f"{ts}:{body_text}".encode("utf-8")
     expected = hmac.new(PADDLE_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
     return secrets.compare_digest(expected, h1)
 
@@ -1058,7 +1062,7 @@ async def paddle_webhook(request: Request) -> Dict[str, Any]:
     event_type = str(payload.get("event_type") or payload.get("eventType") or "unknown")
     data = payload.get("data") or {}
     custom_data = data.get("custom_data") or data.get("customData") or {}
-    request_id = str(custom_data.get("request_id") or "").strip()
+    request_id = str(custom_data.get("request_id") or data.get("passthrough") or "").strip()
     provider_reference = str(
         data.get("id") or data.get("subscription_id") or data.get("transaction_id") or custom_data.get("subscription_id") or ""
     ).strip()
