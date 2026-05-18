@@ -19,9 +19,10 @@ import json
 import os
 import secrets
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional
-from urllib import parse as urlparse
-from urllib import request as urlrequest
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
@@ -84,6 +85,10 @@ def resend_enabled() -> bool:
     return bool(RESEND_API_KEY and RESEND_FROM_EMAIL)
 
 
+def is_valid_email(value: str) -> bool:
+    return "@" in value and "." in value.split("@", 1)[-1]
+
+
 def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> bool:
     if not resend_enabled() or not to_emails:
         return False
@@ -93,7 +98,7 @@ def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> boo
         "subject": subject,
         "html": html_body,
     }
-    req = urlrequest.Request(
+    req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=json.dumps(payload).encode("utf-8"),
         headers={
@@ -103,9 +108,9 @@ def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> boo
         method="POST",
     )
     try:
-        with urlrequest.urlopen(req, timeout=5):
+        with urllib.request.urlopen(req, timeout=5):
             return True
-    except Exception:
+    except urllib.error.URLError:
         return False
 
 
@@ -125,6 +130,8 @@ def paddle_price_id_for_plan(plan: str) -> str:
 def build_paddle_checkout_url(email: str, plan: str, success_url: Optional[str], cancel_url: Optional[str]) -> Optional[str]:
     if not PADDLE_ENABLED or not PADDLE_CHECKOUT_URL:
         return None
+    if not is_valid_email(email):
+        return None
     query: Dict[str, str] = {"email": email, "plan": plan}
     price_id = paddle_price_id_for_plan(plan)
     if price_id:
@@ -135,7 +142,7 @@ def build_paddle_checkout_url(email: str, plan: str, success_url: Optional[str],
         query["cancel_url"] = cancel_url
     query["passthrough"] = jdump({"plan": plan, "email": email, "source": "maisb_dashboard"})
     glue = "&" if "?" in PADDLE_CHECKOUT_URL else "?"
-    return f"{PADDLE_CHECKOUT_URL}{glue}{urlparse.urlencode(query)}"
+    return f"{PADDLE_CHECKOUT_URL}{glue}{urllib.parse.urlencode(query)}"
 
 
 def sha256(value: str) -> str:
