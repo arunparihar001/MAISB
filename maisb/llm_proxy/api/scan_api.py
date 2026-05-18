@@ -24,14 +24,18 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import hmac
 import html
 import io
 import json
 import os
+import re
 import secrets
 import sqlite3
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -68,6 +72,13 @@ APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
 API_VERSION = "2.5.0"
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY") or os.environ.get("RESEND_KEY") or os.environ.get("RESEND_TOKEN")
+RESEND_FROM = os.environ.get("RESEND_FROM_EMAIL") or os.environ.get("RESEND_FROM") or "notifications@maisb.app"
+RESEND_ADMIN_EMAIL = os.environ.get("RESEND_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL")
+PADDLE_VENDOR_ID = os.environ.get("PADDLE_VENDOR_ID", "")
+PADDLE_WEBHOOK_SECRET = os.environ.get("PADDLE_WEBHOOK_SECRET", "")
+PADDLE_PRO_PRICE_ID = os.environ.get("PADDLE_PRO_PRICE_ID", "")
+PADDLE_CERTIFY_PRICE_ID = os.environ.get("PADDLE_CERTIFY_PRICE_ID", "")
 
 # ── Pipeline imports with safe fallback ───────────────────────────────────────
 # In your real repo these imports should succeed and use the MAISB pipeline.
@@ -310,10 +321,31 @@ def init_db() -> None:
             plan TEXT NOT NULL,
             provider TEXT DEFAULT 'manual_invoice',
             status TEXT DEFAULT 'requested',
+            api_key_masked TEXT,
+            provider_reference TEXT,
+            webhook_last_event TEXT,
             notes TEXT,
             metadata_json TEXT DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+    """)
+    for col, ddl in {
+        "api_key_masked": "api_key_masked TEXT",
+        "provider_reference": "provider_reference TEXT",
+        "webhook_last_event": "webhook_last_event TEXT",
+    }.items():
+        add_column_if_missing(conn, "billing_requests", col, ddl)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paddle_webhook_events (
+            event_id TEXT PRIMARY KEY,
+            event_type TEXT,
+            provider_reference TEXT,
+            request_id TEXT,
+            status TEXT,
+            payload_json TEXT DEFAULT '{}',
+            received_at TEXT NOT NULL
         )
     """)
 
@@ -402,6 +434,16 @@ class BillingRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PaddleCheckoutRequest(BaseModel):
+    plan: str = Field("pro", pattern="^(pro|certify|enterprise)$")
+    api_key: Optional[str] = None
+    email: Optional[str] = None
+    company: Optional[str] = None
+    price_id: Optional[str] = None
+    success_url: Optional[str] = None
+    cancel_url: Optional[str] = None
+
+
 class CertifyStartRequest(BaseModel):
     email: str
     company: str
@@ -452,6 +494,72 @@ def require_admin(admin_key: Optional[str] = None, authorization: Optional[str] 
     token = bearer_token(authorization) or (admin_key or "")
     if not secrets.compare_digest(token.encode(), (ADMIN_KEY or "").encode()):
         raise HTTPException(status_code=403, detail="Forbidden: valid admin token required")
+
+
+def send_resend_email(subject: str, text: str, to_email: Optional[str]) -> Dict[str, Any]:
+    if not RESEND_API_KEY:
+        return {"sent": False, "reason": "resend_not_configured"}
+    if not to_email:
+        return {"sent": False, "reason": "missing_to_email"}
+    payload = json.dumps({
+        "from": RESEND_FROM,
+        "to": [to_email],
+        "subject": subject,
+        "text": text,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            body = resp.read().decode("utf-8")
+        return {"sent": True, "response": jload(body, {})}
+    except Exception as exc:
+        return {"sent": False, "reason": str(exc)}
+
+
+def parse_paddle_signature_header(signature_header: str) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    for part in (signature_header or "").split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def verify_paddle_signature(raw_body: bytes, signature_header: Optional[str]) -> bool:
+    if not PADDLE_WEBHOOK_SECRET:
+        return True
+    if not signature_header:
+        return False
+    parsed = parse_paddle_signature_header(signature_header)
+    ts = parsed.get("ts")
+    h1 = parsed.get("h1")
+    if not ts or not h1:
+        return False
+    signed_payload = f"{ts}:{raw_body.decode('utf-8')}".encode("utf-8")
+    expected = hmac.new(PADDLE_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return secrets.compare_digest(expected, h1)
+
+
+def sanitize_for_url(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_\\-]", "", value or "")
+
+
+def get_email_for_api_key(api_key: Optional[str]) -> Optional[str]:
+    if not api_key:
+        return None
+    conn = get_conn()
+    row = conn.execute("SELECT email FROM api_keys WHERE key=?", (api_key,)).fetchone()
+    conn.close()
+    return row["email"] if row else None
 
 
 def signup_count_for_email_today(conn: sqlite3.Connection, email: str) -> int:
@@ -716,6 +824,17 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
     )
     conn.commit()
     conn.close()
+    send_resend_email(
+        "Welcome to MAISB",
+        f"Your MAISB signup is active. API key: {mask_key(raw_key)}",
+        body.email,
+    )
+    if RESEND_ADMIN_EMAIL:
+        send_resend_email(
+            "New MAISB signup",
+            f"New signup: {body.email} ({body.company or 'n/a'})",
+            RESEND_ADMIN_EMAIL,
+        )
 
     return {
         "created": True,
@@ -820,6 +939,17 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    send_resend_email(
+        "MAISB billing request received",
+        f"We received your {body.plan} request ({provider}). Request ID: {request_id}",
+        body.email,
+    )
+    if RESEND_ADMIN_EMAIL:
+        send_resend_email(
+            "New MAISB billing request",
+            f"Request {request_id}: {body.email} plan={body.plan} provider={provider}",
+            RESEND_ADMIN_EMAIL,
+        )
     return {
         "request_id": request_id,
         "status": "requested",
@@ -828,6 +958,152 @@ def billing_upgrade_request(body: BillingRequest) -> Dict[str, Any]:
         "next_step": "Manual commercial review. Send invoice/payment link using your Pakistan-compatible provider.",
         "stripe_direct_enabled": False,
     }
+
+
+@app.get("/v1/billing/status", tags=["Billing"])
+def billing_status(api_key: str = Query(...)) -> Dict[str, Any]:
+    info = get_key_info(api_key)
+    email = info.get("email")
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT request_id, plan, provider, status, provider_reference, updated_at FROM billing_requests WHERE lower(email)=lower(?) ORDER BY updated_at DESC LIMIT 1",
+        (email or "",),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {"status": "none", "provider": None}
+    return {
+        "request_id": row["request_id"],
+        "plan": row["plan"],
+        "provider": row["provider"],
+        "status": row["status"],
+        "provider_reference": row["provider_reference"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@app.post("/v1/billing/paddle/checkout-session", tags=["Billing"])
+def paddle_checkout_session(body: PaddleCheckoutRequest) -> Dict[str, Any]:
+    api_key = (body.api_key or "").strip()
+    email = (body.email or get_email_for_api_key(api_key) or "").strip()
+    if not email:
+        raise HTTPException(status_code=422, detail="Email required to create checkout session")
+    price_id = (body.price_id or (PADDLE_CERTIFY_PRICE_ID if body.plan == "certify" else PADDLE_PRO_PRICE_ID)).strip()
+    request_id = f"bill_{secrets.token_hex(8)}"
+    now = utcnow()
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO billing_requests
+        (request_id, email, company, plan, provider, status, api_key_masked, notes, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'paddle', ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            email,
+            body.company,
+            body.plan,
+            "checkout_pending",
+            mask_key(api_key),
+            "Paddle checkout session created",
+            jdump({"price_id": price_id, "success_url": body.success_url, "cancel_url": body.cancel_url}),
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    send_resend_email(
+        "MAISB checkout started",
+        f"Paddle checkout started for plan={body.plan}. Request ID: {request_id}",
+        email,
+    )
+    if not PADDLE_VENDOR_ID or not price_id:
+        return {
+            "configured": False,
+            "message": "Paddle is not fully configured. Falling back to manual upgrade request.",
+            "request_id": request_id,
+        }
+    checkout_url = (
+        f"https://checkout.paddle.com/checkout/{sanitize_for_url(PADDLE_VENDOR_ID)}/"
+        f"{sanitize_for_url(price_id)}?passthrough={request_id}"
+    )
+    return {
+        "configured": True,
+        "request_id": request_id,
+        "checkout_url": checkout_url,
+        "checkout": {
+            "provider": "paddle",
+            "price_id": price_id,
+            "request_id": request_id,
+            "success_url": body.success_url,
+            "cancel_url": body.cancel_url,
+        },
+    }
+
+
+@app.post("/v1/billing/paddle/webhook", tags=["Billing"])
+async def paddle_webhook(request: Request) -> Dict[str, Any]:
+    raw_body = await request.body()
+    signature_header = request.headers.get("Paddle-Signature")
+    if not verify_paddle_signature(raw_body, signature_header):
+        raise HTTPException(status_code=403, detail="Invalid Paddle webhook signature")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    event_type = str(payload.get("event_type") or payload.get("eventType") or "unknown")
+    data = payload.get("data") or {}
+    custom_data = data.get("custom_data") or data.get("customData") or {}
+    request_id = str(custom_data.get("request_id") or "").strip()
+    provider_reference = str(
+        data.get("id") or data.get("subscription_id") or data.get("transaction_id") or custom_data.get("subscription_id") or ""
+    ).strip()
+    status = str(
+        data.get("status")
+        or payload.get("status")
+        or ("paid" if event_type in {"transaction.completed", "subscription.activated"} else "pending")
+    )
+    event_id = str(payload.get("event_id") or payload.get("eventId") or f"evt_{secrets.token_hex(8)}")
+    now = utcnow()
+
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO paddle_webhook_events
+        (event_id, event_type, provider_reference, request_id, status, payload_json, received_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (event_id, event_type, provider_reference, request_id, status, jdump(payload), now),
+    )
+
+    updated = 0
+    if request_id:
+        cur = conn.execute(
+            """
+            UPDATE billing_requests
+            SET status=?, provider='paddle', provider_reference=?, webhook_last_event=?, updated_at=?
+            WHERE request_id=?
+            """,
+            (status, provider_reference, event_type, now, request_id),
+        )
+        updated = cur.rowcount
+    elif provider_reference:
+        cur = conn.execute(
+            """
+            UPDATE billing_requests
+            SET status=?, provider='paddle', provider_reference=?, webhook_last_event=?, updated_at=?
+            WHERE provider='paddle' AND provider_reference=?
+            """,
+            (status, provider_reference, event_type, now, provider_reference),
+        )
+        updated = cur.rowcount
+
+    conn.commit()
+    conn.close()
+    return {"received": True, "event_type": event_type, "status": status, "updated_rows": updated}
 
 # ── Certify helpers / endpoints ──────────────────────────────────────────────
 
@@ -891,6 +1167,11 @@ def certify_start(body: CertifyStartRequest) -> Dict[str, Any]:
     )
     conn.commit()
     conn.close()
+    send_resend_email(
+        "MAISB Certify request received",
+        f"Your certify order {order_id} is now in assessment_requested state.",
+        body.email,
+    )
     return {
         "order_id": order_id,
         "status": "assessment_requested",
