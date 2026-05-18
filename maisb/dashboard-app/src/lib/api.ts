@@ -9,7 +9,18 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     ...init,
   })
 
-  const data = await response.json().catch(() => ({}))
+  const raw = await response.text()
+  let data: unknown = {}
+  if (raw) {
+    try {
+      data = JSON.parse(raw)
+    } catch {
+      if (response.ok) {
+        throw new Error('Unexpected non-JSON response from API')
+      }
+      throw new Error(raw)
+    }
+  }
   if (!response.ok) {
     throw new Error((data as { detail?: string })?.detail || 'Request failed')
   }

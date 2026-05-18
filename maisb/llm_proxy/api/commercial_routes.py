@@ -16,7 +16,9 @@ import hashlib
 import html
 import io
 import json
+import logging
 import os
+import re
 import secrets
 import sqlite3
 import urllib.error
@@ -41,6 +43,7 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://maisb.app")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
+LOGGER = logging.getLogger(__name__)
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "")
 RESEND_NOTIFY_EMAILS = [email.strip() for email in os.environ.get("RESEND_NOTIFY_EMAILS", "").split(",") if email.strip()]
@@ -86,7 +89,7 @@ def resend_enabled() -> bool:
 
 
 def is_valid_email(value: str) -> bool:
-    return "@" in value and "." in value.split("@", 1)[-1]
+    return bool(re.fullmatch(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", value.strip()))
 
 
 def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> bool:
@@ -110,7 +113,8 @@ def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> boo
     try:
         with urllib.request.urlopen(req, timeout=5):
             return True
-    except urllib.error.URLError:
+    except urllib.error.URLError as exc:
+        LOGGER.warning("Resend delivery failed: %s", exc)
         return False
 
 

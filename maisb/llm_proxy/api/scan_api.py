@@ -27,7 +27,9 @@ import hashlib
 import html
 import io
 import json
+import logging
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -79,6 +81,7 @@ PADDLE_PRICE_ID_PRO = os.environ.get("PADDLE_PRICE_ID_PRO", "")
 PADDLE_PRICE_ID_ENTERPRISE = os.environ.get("PADDLE_PRICE_ID_ENTERPRISE", "")
 PADDLE_PRICE_ID_CERTIFY = os.environ.get("PADDLE_PRICE_ID_CERTIFY", "")
 API_VERSION = "2.5.0"
+LOGGER = logging.getLogger(__name__)
 
 # ── Pipeline imports with safe fallback ───────────────────────────────────────
 # In your real repo these imports should succeed and use the MAISB pipeline.
@@ -227,7 +230,7 @@ def resend_enabled() -> bool:
 
 
 def is_valid_email(value: str) -> bool:
-    return "@" in value and "." in value.split("@", 1)[-1]
+    return bool(re.fullmatch(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", value.strip()))
 
 
 def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> bool:
@@ -251,7 +254,8 @@ def send_resend_email(to_emails: List[str], subject: str, html_body: str) -> boo
     try:
         with urllib.request.urlopen(req, timeout=5):
             return True
-    except urllib.error.URLError:
+    except urllib.error.URLError as exc:
+        LOGGER.warning("Resend delivery failed: %s", exc)
         return False
 
 
