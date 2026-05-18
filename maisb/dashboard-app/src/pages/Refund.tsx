@@ -1,0 +1,3 @@
+export default function Refund() {
+  return <main className="public-shell narrow"><h1>Refund Policy</h1><section className="card"><h2>Free Developer</h2><p>The Free Developer plan has no charges.</p><h2>Pro subscription</h2><p>Pro subscription cancellation and refund requests are reviewed case by case depending on usage, billing status, and applicable law.</p><h2>MAISB Certify</h2><p>Certify assessment/report work may be non-refundable once assessment work begins or a digital report/badge has been delivered, except where required by law.</p><h2>Processing</h2><p>Paddle may process billing and refunds where it acts as Merchant of Record. Contact support@maisb.app with your email, company, order ID, and reason.</p></section></main>
+}
