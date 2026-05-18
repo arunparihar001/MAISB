@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import hmac
 import html
 import io
 import json
@@ -32,6 +33,8 @@ import secrets
 import sqlite3
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +70,32 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://maisb.app")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
+RESEND_API_KEY = (
+    os.environ.get("RESEND_API_KEY")
+    or os.environ.get("RESEND_KEY")
+    or os.environ.get("RAILWAY_RESEND_API_KEY")
+    or ""
+)
+RESEND_FROM_EMAIL = (
+    os.environ.get("RESEND_FROM_EMAIL")
+    or os.environ.get("RESEND_FROM")
+    or os.environ.get("MAIL_FROM")
+    or "MAISB <noreply@maisb.app>"
+)
+RESEND_ADMIN_EMAIL = (
+    os.environ.get("RESEND_ADMIN_EMAIL")
+    or os.environ.get("ADMIN_ALERT_EMAIL")
+    or os.environ.get("COMMERCIAL_ALERT_EMAIL")
+    or ""
+)
+PADDLE_API_KEY = os.environ.get("PADDLE_API_KEY", "")
+PADDLE_WEBHOOK_SECRET = os.environ.get("PADDLE_WEBHOOK_SECRET", "")
+PADDLE_ENV = os.environ.get("PADDLE_ENV", "sandbox").lower()
+PADDLE_API_BASE = "https://sandbox-api.paddle.com" if PADDLE_ENV != "production" else "https://api.paddle.com"
+PADDLE_PRO_PRICE_ID = os.environ.get("PADDLE_PRO_PRICE_ID", "")
+PADDLE_CERTIFY_PRICE_ID = os.environ.get("PADDLE_CERTIFY_PRICE_ID", "")
+PADDLE_CHECKOUT_SUCCESS_URL = os.environ.get("PADDLE_CHECKOUT_SUCCESS_URL", f"{APP_DASHBOARD_URL}/billing")
+PADDLE_CHECKOUT_CANCEL_URL = os.environ.get("PADDLE_CHECKOUT_CANCEL_URL", f"{APP_DASHBOARD_URL}/billing")
 API_VERSION = "2.5.0"
 
 # ── Pipeline imports with safe fallback ───────────────────────────────────────
@@ -316,6 +345,27 @@ def init_db() -> None:
             updated_at TEXT NOT NULL
         )
     """)
+    for col, ddl in {
+        "provider_ref": "provider_ref TEXT",
+        "payment_status": "payment_status TEXT DEFAULT 'pending'",
+    }.items():
+        add_column_if_missing(conn, "billing_requests", col, ddl)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS billing_subscriptions (
+            subscription_id TEXT PRIMARY KEY,
+            customer_email TEXT,
+            customer_id TEXT,
+            transaction_id TEXT,
+            plan TEXT DEFAULT 'pro',
+            status TEXT DEFAULT 'pending',
+            checkout_url TEXT,
+            provider TEXT DEFAULT 'paddle',
+            raw_payload TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
 
     # Certify table compatible with previous Claude implementation and new workflow.
     conn.execute("""
@@ -452,6 +502,58 @@ def require_admin(admin_key: Optional[str] = None, authorization: Optional[str] 
     token = bearer_token(authorization) or (admin_key or "")
     if not secrets.compare_digest(token.encode(), (ADMIN_KEY or "").encode()):
         raise HTTPException(status_code=403, detail="Forbidden: valid admin token required")
+
+
+def send_resend_email(to_email: str, subject: str, html_body: str) -> bool:
+    if not RESEND_API_KEY or not to_email:
+        return False
+    payload = {
+        "from": RESEND_FROM_EMAIL,
+        "to": [to_email],
+        "subject": subject,
+        "html": html_body,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            return True
+    except Exception:
+        return False
+
+
+def notify_admin(subject: str, html_body: str) -> None:
+    if RESEND_ADMIN_EMAIL:
+        send_resend_email(RESEND_ADMIN_EMAIL, subject, html_body)
+
+
+def paddle_signature_valid(raw_body: bytes, signature_header: str) -> bool:
+    if not PADDLE_WEBHOOK_SECRET:
+        return True
+    if not signature_header:
+        return False
+    parts = {}
+    for token in signature_header.split(";"):
+        if "=" in token:
+            key, value = token.split("=", 1)
+            parts[key.strip()] = value.strip()
+    ts = parts.get("ts")
+    digest = parts.get("h1")
+    if not ts or not digest:
+        return False
+    expected = hmac.new(
+        PADDLE_WEBHOOK_SECRET.encode("utf-8"),
+        f"{ts}:{raw_body.decode('utf-8')}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return secrets.compare_digest(expected, digest)
 
 
 def signup_count_for_email_today(conn: sqlite3.Connection, email: str) -> int:
