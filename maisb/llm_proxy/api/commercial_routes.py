@@ -196,7 +196,7 @@ def send_verification_email(email: str, verification_url: str) -> bool:
         "<p>Welcome to MAISB Shield.</p>"
         "<p>Please verify your email to activate profile access and API key generation.</p>"
         f"<p><a href='{html.escape(verification_url)}'>Verify email</a></p>"
-        "<p>This verification link expires in 24 hours and can only be used once.</p>"
+        f"<p>This verification link expires in {PROFILE_VERIFICATION_TTL_HOURS} hours and can only be used once.</p>"
     )
     return send_resend_email([email], "Verify your MAISB Shield email", body)
 
@@ -622,7 +622,7 @@ def upsert_profile_for_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
         conn.execute(
             """
             UPDATE profiles
-            SET name=?, company=?, use_case=?, status=?, created_at=?
+            SET name=?, company=?, use_case=?, status=?
             WHERE profile_id=?
             """,
             (
@@ -630,7 +630,6 @@ def upsert_profile_for_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
                 body.company,
                 body.use_case,
                 "verified" if int(existing["email_verified"] or 0) == 1 else "pending_verification",
-                now,
                 profile_id,
             ),
         )
