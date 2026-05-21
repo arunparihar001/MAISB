@@ -37,8 +37,15 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   return data as T
 }
 
-// This helper is ONLY for backend API requests where the existing MAISB API requires api_key.
-// Never use it for browser navigation/route URLs.
+// bearerHeaders returns an Authorization header for profile API calls.
+// Use this instead of withApiKey for all profile-based endpoints.
+export function bearerHeaders(apiKey: string): HeadersInit {
+  return apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
+}
+
+// withApiKey is kept for backward-compatible calls to existing backend endpoints
+// that accept api_key as a query parameter (e.g. /v1/public/usage, /v1/public/dashboard).
+// Do not use for new profile endpoints.
 export function withApiKey(path: string, apiKey: string): string {
   const glue = path.includes('?') ? '&' : '?'
   return `${path}${glue}api_key=${encodeURIComponent(apiKey)}`
