@@ -74,6 +74,7 @@ APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.maisb.app")
 CERTIFY_BASE_URL = os.environ.get("CERTIFY_BASE_URL", API_BASE_URL)
 API_VERSION = "2.5.0"
+PROFILE_VERIFICATION_TTL_HOURS = int(os.environ.get("PROFILE_VERIFICATION_TTL_HOURS", "24"))
 
 LOGGER = logging.getLogger(__name__)
 
@@ -325,6 +326,16 @@ def send_api_key_created_email(email: str, raw_api_key: str, api_key_masked: str
         f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"
     )
     return send_resend_email([email], "Your MAISB Shield API key", body)
+
+
+def send_verification_email(email: str, verification_url: str) -> bool:
+    body = (
+        "<p>Welcome to MAISB Shield.</p>"
+        "<p>Please verify your email to activate profile access and API key generation.</p>"
+        f"<p><a href='{html.escape(verification_url)}'>Verify email</a></p>"
+        "<p>This verification link expires in 24 hours and can only be used once.</p>"
+    )
+    return send_resend_email([email], "Verify your MAISB Shield email", body)
 
 
 def send_billing_request_email(email: str, plan: str, request_id: str, company: Optional[str] = None) -> bool:
@@ -589,6 +600,29 @@ def init_db() -> None:
             created_at TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS profiles (
+            profile_id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            name TEXT,
+            company TEXT,
+            use_case TEXT,
+            status TEXT DEFAULT 'pending_verification',
+            email_verified INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            verified_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+            token_hash TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            profile_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
 
     # Billing request table: deliberately not direct Stripe.
     conn.execute("""
@@ -682,6 +716,21 @@ class PublicSignupRequest(BaseModel):
     invite_code: Optional[str] = None
 
 
+class ProfileSignupRequest(BaseModel):
+    email: str
+    name: str
+    company: Optional[str] = None
+    use_case: Optional[str] = Field(default="Android / AI agent runtime protection")
+
+
+class ProfileVerifyRequest(BaseModel):
+    token: str
+
+
+class ProfileApiKeyRequest(BaseModel):
+    email: str
+
+
 class BillingRequest(BaseModel):
     email: str
     company: Optional[str] = None
@@ -762,6 +811,91 @@ def signup_count_for_email_today(conn: sqlite3.Connection, email: str) -> int:
 
 def create_public_api_key() -> str:
     return f"maisb_live_{secrets.token_urlsafe(24)}"
+
+
+def parse_ts(value: Optional[str]) -> Optional[dt.datetime]:
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def upsert_profile_for_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
+    conn = get_conn()
+    existing = conn.execute("SELECT profile_id, status, email_verified FROM profiles WHERE lower(email)=lower(?)", (body.email,)).fetchone()
+    now = utcnow()
+    if existing:
+        profile_id = existing["profile_id"]
+        conn.execute(
+            """
+            UPDATE profiles
+            SET name=?, company=?, use_case=?, status=?, created_at=?
+            WHERE profile_id=?
+            """,
+            (
+                body.name.strip(),
+                body.company,
+                body.use_case,
+                "verified" if int(existing["email_verified"] or 0) == 1 else "pending_verification",
+                now,
+                profile_id,
+            ),
+        )
+    else:
+        profile_id = f"profile_{secrets.token_hex(8)}"
+        conn.execute(
+            """
+            INSERT INTO profiles (profile_id, email, name, company, use_case, status, email_verified, created_at, verified_at)
+            VALUES (?, ?, ?, ?, ?, 'pending_verification', 0, ?, NULL)
+            """,
+            (profile_id, body.email, body.name.strip(), body.company, body.use_case, now),
+        )
+    conn.commit()
+    row = conn.execute("SELECT profile_id, email, status, email_verified FROM profiles WHERE profile_id=?", (profile_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else {"profile_id": profile_id, "email": body.email, "status": "pending_verification", "email_verified": 0}
+
+
+def create_email_verification_token(email: str, profile_id: str) -> str:
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = sha256(raw_token)
+    now = utcnow()
+    expires_at = (dt.datetime.utcnow() + dt.timedelta(hours=PROFILE_VERIFICATION_TTL_HOURS)).replace(microsecond=0).isoformat()
+    conn = get_conn()
+    conn.execute("UPDATE email_verification_tokens SET used_at=? WHERE profile_id=? AND used_at IS NULL", (now, profile_id))
+    conn.execute(
+        """
+        INSERT INTO email_verification_tokens (token_hash, email, profile_id, expires_at, used_at, created_at)
+        VALUES (?, ?, ?, ?, NULL, ?)
+        """,
+        (token_hash, email, profile_id, expires_at, now),
+    )
+    conn.commit()
+    conn.close()
+    return raw_token
+
+
+def profile_status_by_email(email: str) -> Dict[str, Any]:
+    conn = get_conn()
+    profile = conn.execute(
+        "SELECT profile_id, email, name, company, use_case, status, email_verified, created_at, verified_at FROM profiles WHERE lower(email)=lower(?)",
+        (email,),
+    ).fetchone()
+    if not profile:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Profile not found")
+    key = conn.execute("SELECT key FROM api_keys WHERE lower(email)=lower(?) ORDER BY created DESC LIMIT 1", (email,)).fetchone()
+    conn.close()
+    return {
+        "profile_id": profile["profile_id"],
+        "email": profile["email"],
+        "status": profile["status"],
+        "email_verified": bool(profile["email_verified"]),
+        "has_api_key": key is not None,
+        "api_key_masked": mask_key(key["key"]) if key else None,
+    }
 
 
 def get_key_info(api_key: str) -> Dict[str, Any]:
@@ -994,6 +1128,119 @@ def usage(api_key: str) -> Dict[str, Any]:
     }
 
 # ── Public signup / customer dashboard ───────────────────────────────────────
+
+@app.post("/v1/profile/signup", tags=["Profile"])
+def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail="Valid email required")
+    if not (body.name or "").strip():
+        raise HTTPException(status_code=422, detail="Name is required")
+    profile = upsert_profile_for_signup(body)
+    token = create_email_verification_token(profile["email"], profile["profile_id"])
+    verification_url = f"{APP_DASHBOARD_URL}/verify-email?token={urllib.parse.quote(token)}"
+    sent = send_verification_email(profile["email"], verification_url)
+    return {
+        "profile_id": profile["profile_id"],
+        "email": profile["email"],
+        "status": profile["status"],
+        "verification_email_sent": bool(sent),
+    }
+
+
+@app.get("/v1/profile/verify-email", tags=["Profile"])
+def verify_profile_email_get(token: str = Query(...)) -> Dict[str, Any]:
+    return verify_profile_email_post(ProfileVerifyRequest(token=token))
+
+
+@app.post("/v1/profile/verify-email", tags=["Profile"])
+def verify_profile_email_post(body: ProfileVerifyRequest) -> Dict[str, Any]:
+    token = (body.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=422, detail="Verification token is required")
+    token_hash = sha256(token)
+    now_dt = dt.datetime.utcnow()
+    now = now_dt.replace(microsecond=0).isoformat()
+    conn = get_conn()
+    row = conn.execute(
+        """
+        SELECT token_hash, email, profile_id, expires_at, used_at
+        FROM email_verification_tokens
+        WHERE token_hash=?
+        """,
+        (token_hash,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Verification token not found")
+    if row["used_at"]:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Verification token already used")
+    expires_at = parse_ts(row["expires_at"])
+    if not expires_at or expires_at < now_dt:
+        conn.close()
+        raise HTTPException(status_code=410, detail="Verification token expired")
+    conn.execute("UPDATE email_verification_tokens SET used_at=? WHERE token_hash=?", (now, token_hash))
+    conn.execute(
+        "UPDATE profiles SET status='verified', email_verified=1, verified_at=? WHERE profile_id=?",
+        (now, row["profile_id"]),
+    )
+    conn.commit()
+    conn.close()
+    return {"verified": True, "email": row["email"], "profile_id": row["profile_id"], "status": "verified"}
+
+
+@app.get("/v1/profile/status", tags=["Profile"])
+def profile_status(email: str = Query(...)) -> Dict[str, Any]:
+    if not is_valid_email(email):
+        raise HTTPException(status_code=422, detail="Valid email required")
+    return profile_status_by_email(email)
+
+
+@app.post("/v1/profile/api-keys", tags=["Profile"])
+def profile_create_api_key(body: ProfileApiKeyRequest) -> Dict[str, Any]:
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail="Valid email required")
+    conn = get_conn()
+    profile = conn.execute(
+        "SELECT profile_id, status, email_verified, company FROM profiles WHERE lower(email)=lower(?)",
+        (body.email,),
+    ).fetchone()
+    if not profile:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if int(profile["email_verified"] or 0) != 1:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Email verification required before API key creation")
+    existing = conn.execute("SELECT key, created FROM api_keys WHERE lower(email)=lower(?) ORDER BY created DESC LIMIT 1", (body.email,)).fetchone()
+    if existing:
+        conn.close()
+        return {
+            "created": False,
+            "email": body.email,
+            "status": "verified",
+            "has_api_key": True,
+            "api_key_masked": mask_key(existing["key"]),
+            "message": "API key already exists for this profile. Raw key is shown only once at creation time.",
+        }
+    raw_key = create_public_api_key()
+    now = utcnow()
+    masked = mask_key(raw_key)
+    conn.execute(
+        "INSERT INTO api_keys (key, plan, scan_count, email, created) VALUES (?, 'free', 0, ?, ?)",
+        (raw_key, body.email, now),
+    )
+    conn.commit()
+    conn.close()
+    send_api_key_created_email(body.email, raw_key, masked)
+    return {
+        "created": True,
+        "email": body.email,
+        "status": "verified",
+        "has_api_key": True,
+        "api_key": raw_key,
+        "api_key_masked": masked,
+        "warning": "This raw API key is shown once. Store it securely.",
+    }
 
 @app.post("/v1/public/signup", tags=["Public Signup"])
 def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]:

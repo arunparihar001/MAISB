@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import PricingCard, { Plan } from '../components/PricingCard'
 import { apiRequest } from '../lib/api'
-import { createPaddleCheckout } from '../lib/paddle'
-import { DASHBOARD_URL } from '../lib/config'
 
 const fallbackPlans: Plan[] = [
   { id: 'free', name: 'Free Developer', price: '$0/month', features: ['Starter API key', 'Limited monthly scans', 'Basic usage dashboard', 'Android SDK testing'] },
@@ -29,15 +27,5 @@ export default function Billing() {
     } catch (err) { setMessage((err as Error).message) }
   }
 
-  async function startPaddle(plan: 'pro' | 'certify') {
-    setMessage('')
-    if (!email.trim()) { setMessage('Billing email is required'); return }
-    try {
-      const data = await createPaddleCheckout({ email, company, plan, success_url: `${DASHBOARD_URL}/billing?checkout=success`, cancel_url: `${DASHBOARD_URL}/billing?checkout=cancelled` })
-      if (data.checkout_url) window.location.href = data.checkout_url
-      else setMessage(data.message || `Paddle checkout config created for ${plan}; payment provisioning remains pending webhook confirmation.`)
-    } catch (err) { setMessage((err as Error).message) }
-  }
-
-  return <div className="stack"><h2>Billing</h2><p>Frontend success does not upgrade access. MAISB upgrades plans only after trusted billing confirmation/webhook processing.</p><div className="form-grid"><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Billing email" /><input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company" /></div><div className="grid">{plans.map((plan) => <div key={plan.id} className="stack compact"><PricingCard plan={plan} />{plan.id === 'pro' && <button onClick={() => startPaddle('pro')}>Pay with Paddle</button>}{plan.id === 'enterprise' && <button onClick={() => requestUpgrade('enterprise')}>Request quote</button>}{plan.id === 'certify' && <button onClick={() => startPaddle('certify')}>Start Certify checkout</button>}</div>)}</div>{message && <p className="notice">{message}</p>}</div>
+  return <div className="stack"><h2>Billing</h2><p>Online checkout is being configured. For Pro, Enterprise, or MAISB Certify, please request an invoice or contact sales@maisb.app. Access changes only after billing approval. We do not currently collect card payments directly on this website.</p><div className="form-grid"><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Billing email" /><input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Company" /></div><div className="grid">{plans.map((plan) => <div key={plan.id} className="stack compact"><PricingCard plan={plan} />{plan.id !== 'free' && <button onClick={() => requestUpgrade(plan.id)}>Request invoice</button>}</div>)}</div>{message && <p className="notice">{message}</p>}</div>
 }
