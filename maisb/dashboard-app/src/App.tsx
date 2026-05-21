@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
 import { getApiKey } from './lib/auth'
@@ -18,9 +18,11 @@ import Signup from './pages/Signup'
 import SocConsole from './pages/SocConsole'
 import Terms from './pages/Terms'
 import Usage from './pages/Usage'
+import VerifyEmail from './pages/VerifyEmail'
 
 function RequireApiKey({ children }: { children: ReactElement }) {
-  if (!getApiKey()) return <Navigate to="/login" replace />
+  const location = useLocation()
+  if (!getApiKey() && location.pathname !== '/api-keys') return <Navigate to="/login" replace />
   return children
 }
 
@@ -51,6 +53,7 @@ export default function App() {
       <Route path="/refund" element={<Refund />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
       <Route
         element={
           <RequireApiKey>

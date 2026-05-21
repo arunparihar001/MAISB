@@ -18,10 +18,10 @@ export default function Login() {
   return (
     <main className="auth-page">
       <form className="auth-card" onSubmit={onSubmit}>
-        <h1>Access dashboard</h1><p>Paste your MAISB API key. It is stored locally in this browser for the MVP.</p>
+        <h1>Access MAISB dashboard</h1><p>Paste your verified MAISB API key. It is stored locally in this browser for this MVP experience.</p>
         <input value={key} onChange={(e) => setKey(e.target.value)} placeholder="maisb_live_..." />
         <button type="submit">Continue</button>
-        <a href="/signup">Need a key? Create one</a>
+        <a href="/signup">Need access? Create profile</a>
         {error && <p className="error">{error}</p>}
       </form>
     </main>

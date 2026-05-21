@@ -5,7 +5,7 @@ export default function ApiKeyCard({ apiKeyMasked }: Props) {
     <div className="card">
       <h3>Current API Key</h3>
       <code>{apiKeyMasked || 'Not available'}</code>
-      <p className="muted">Raw API keys are only shown once during signup. Store them securely.</p>
+      <p className="muted">Raw API keys are shown once after verified profile activation. Store them securely.</p>
     </div>
   )
 }
