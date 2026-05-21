@@ -18,6 +18,7 @@ import Signup from './pages/Signup'
 import SocConsole from './pages/SocConsole'
 import Terms from './pages/Terms'
 import Usage from './pages/Usage'
+import VerifyEmail from './pages/VerifyEmail'
 
 function RequireApiKey({ children }: { children: ReactElement }) {
   if (!getApiKey()) return <Navigate to="/login" replace />
@@ -44,13 +45,20 @@ function HostHome() {
 export default function App() {
   return (
     <Routes>
+      {/* Public routes */}
       <Route path="/" element={<HostHome />} />
       <Route path="/pricing" element={<Pricing />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/refund" element={<Refund />} />
-      <Route path="/login" element={<Login />} />
+
+      {/* Profile / auth routes – no API key required */}
       <Route path="/signup" element={<Signup />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/api-keys" element={<ApiKeys />} />
+
+      {/* Protected dashboard routes */}
       <Route
         element={
           <RequireApiKey>
@@ -59,13 +67,13 @@ export default function App() {
         }
       >
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/api-keys" element={<ApiKeys />} />
         <Route path="/usage" element={<Usage />} />
         <Route path="/billing" element={<Billing />} />
         <Route path="/certify" element={<Certify />} />
         <Route path="/soc" element={<SocConsole />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
+
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

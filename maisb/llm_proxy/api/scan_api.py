@@ -217,6 +217,8 @@ include_optional_router("api.phase4_soc", "phase4_soc")
 include_optional_router("api.signup", "legacy_signup")
 include_optional_router("api.certify", "legacy_certify")
 include_optional_router("api.billing", "legacy_billing")
+# Profile / email-verification auth flow (new; safe to load alongside existing routes).
+include_optional_router("api.profile_routes", "profile")
 
 # ── Database helpers ─────────────────────────────────────────────────────────
 
