@@ -12,9 +12,9 @@ const AUTH_TOKEN_STORAGE_KEY = 'maisb_auth_token'
 const ADMIN_KEY_STORAGE_KEY = 'maisb_admin_key'
 const PROFILE_STORAGE_KEY = 'maisb_profile'
 const PLAN_STORAGE_KEY = 'maisb_selected_plan'
-const API_KEY_STORAGE_KEY = 'maisb_api_key'
 const API_KEY_EXISTS_STORAGE_KEY = 'maisb_api_key_exists'
 const EMAIL_STORAGE_KEY = 'maisb_email'
+let transientApiKey = ''
 
 export function setSessionToken(value: string): void {
   localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, value.trim())
@@ -59,16 +59,16 @@ export function clearSelectedPlan(): void {
 }
 
 export function setApiKey(value: string): void {
-  localStorage.setItem(API_KEY_STORAGE_KEY, value.trim())
+  transientApiKey = value.trim()
   localStorage.setItem(API_KEY_EXISTS_STORAGE_KEY, '1')
 }
 
 export function getApiKey(): string {
-  return localStorage.getItem(API_KEY_STORAGE_KEY) || ''
+  return transientApiKey
 }
 
 export function clearApiKey(): void {
-  localStorage.removeItem(API_KEY_STORAGE_KEY)
+  transientApiKey = ''
 }
 
 export function setApiKeyExists(value: boolean): void {
