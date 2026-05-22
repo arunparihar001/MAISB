@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import MetricCard from '../components/MetricCard'
 import UsageChart from '../components/UsageChart'
-import { apiRequest, withApiKey } from '../lib/api'
+import { apiRequest } from '../lib/api'
 import { getApiKey } from '../lib/auth'
 
 type DashboardData = { customer?: { email?: string; plan?: string; api_key_masked?: string }; usage?: { scan_count?: number; limit?: number; remaining?: number } }
@@ -9,7 +9,7 @@ type DashboardData = { customer?: { email?: string; plan?: string; api_key_maske
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [error, setError] = useState('')
-  useEffect(() => { const key = getApiKey(); if (!key) return; apiRequest<DashboardData>(withApiKey('/v1/public/dashboard', key)).then(setData).catch((e) => setError((e as Error).message)) }, [])
+  useEffect(() => { const key = getApiKey(); if (!key) return; apiRequest<DashboardData>('/v1/public/dashboard').then(setData).catch((e) => setError((e as Error).message)) }, [])
   if (error) return <div className="stack"><p className="error">{error}</p></div>
   if (!data) return <div className="stack"><p>Loading dashboard...</p></div>
   const usage = data.usage || {}

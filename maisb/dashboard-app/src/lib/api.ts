@@ -1,3 +1,4 @@
+import { clearApiKey, getApiKey } from './auth'
 import { API_BASE_URL } from './config'
 
 export type ApiError = Error & { status?: number }
@@ -5,6 +6,12 @@ export type ApiError = Error & { status?: number }
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers || {})
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+
+  // Inject Bearer token automatically if a key is stored
+  const key = getApiKey()
+  if (key && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${key}`)
+  }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -24,6 +31,16 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     }
   }
 
+  if (response.status === 401) {
+    // Clear stale key on 401
+    clearApiKey()
+    const detail = (data as { detail?: string; error?: string; message?: string })?.detail ||
+      `Request failed with HTTP ${response.status}`
+    const err = new Error(detail) as ApiError
+    err.status = response.status
+    throw err
+  }
+
   if (!response.ok) {
     const detail = (data as { detail?: string; error?: string; message?: string })?.detail ||
       (data as { detail?: string; error?: string; message?: string })?.error ||
@@ -35,13 +52,6 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   }
 
   return data as T
-}
-
-// This helper is ONLY for backend API requests where the existing MAISB API requires api_key.
-// Never use it for browser navigation/route URLs.
-export function withApiKey(path: string, apiKey: string): string {
-  const glue = path.includes('?') ? '&' : '?'
-  return `${path}${glue}api_key=${encodeURIComponent(apiKey)}`
 }
 
 export function withAdminKey(path: string, adminKey: string): string {
