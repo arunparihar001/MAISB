@@ -23,7 +23,7 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -331,11 +331,21 @@ def phase3_health() -> Dict[str, Any]:
 
 @router.get("/v1/dashboard/summary")
 def dashboard_summary(
-    admin_key: str = Query(...),
+    admin_key: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
     tenant_id: str = Query(DEFAULT_TENANT_ID),
     hours: int = Query(24, ge=1, le=24 * 30),
 ) -> Dict[str, Any]:
-    require_admin(admin_key)
+    if admin_key:
+        require_admin(admin_key)
+    elif authorization:
+        try:
+            from api.profile_routes import resolve_profile_from_bearer  # type: ignore
+            resolve_profile_from_bearer(authorization, allow_api_key=True)
+        except Exception:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    else:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     conn = get_conn()
     counts = get_phase2_counts(conn, tenant_id)

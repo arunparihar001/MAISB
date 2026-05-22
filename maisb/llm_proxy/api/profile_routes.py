@@ -1,25 +1,10 @@
-# maisb/llm_proxy/api/profile_routes.py
-# ─────────────────────────────────────────────────────────────────────────────
-# MAISB Profile & Auth Routes
-#
-# New enterprise auth flow (Resend.com-style):
-#   POST /v1/profile/signup       → create profile, send verification email
-#   POST /v1/profile/verify-email → mark profile as verified (token in body)
-#   POST /v1/profile/login        → login with email, return profile data
-#   POST /v1/profile/api-keys     → generate API key (raw key shown once, SHA256 in DB)
-#
-# Security:
-#   - API keys: SHA256 hash stored in DB, raw key returned once
-#   - Verification tokens: SHA256 hash in DB, 24hr expiry, single-use
-#   - No API keys in URLs — only Bearer headers
-#   - POST body for all sensitive operations
-# ─────────────────────────────────────────────────────────────────────────────
-
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import hashlib
 import html
+import io
 import json
 import logging
 import os
@@ -27,15 +12,15 @@ import re
 import secrets
 import sqlite3
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Header, Request
+import jwt
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
+from passlib.context import CryptContext
 from pydantic import BaseModel, Field
-
-# ── Path setup (mirrors scan_api.py so this module finds shared helpers) ─────
 
 THIS_FILE = Path(__file__).resolve()
 API_DIR = THIS_FILE.parent
@@ -46,25 +31,21 @@ for p in (str(LLM_PROXY_DIR), str(MAISB_DIR), str(REPO_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# ── Environment ───────────────────────────────────────────────────────────────
-
 DB_PATH = os.environ.get("DB_PATH", "usage.db")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM = (
-    os.environ.get("RESEND_FROM")
-    or os.environ.get("RESEND_FROM_EMAIL")
-    or "MAISB <hello@updates.maisb.app>"
-)
+RESEND_FROM = os.environ.get("RESEND_FROM") or os.environ.get("RESEND_FROM_EMAIL") or "MAISB <hello@updates.maisb.app>"
 RESEND_REPLY_TO = os.environ.get("RESEND_REPLY_TO", "")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
+SESSION_SECRET = os.environ.get("SESSION_SECRET", os.environ.get("ADMIN_KEY", "dev_only_session_secret"))
+SESSION_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS", "12"))
 TOKEN_EXPIRY_HOURS = 24
 
 LOGGER = logging.getLogger(__name__)
+PASSWORD_CTX = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-router = APIRouter(prefix="/v1/profile", tags=["Profile"])
+router = APIRouter(tags=["SaaS"])
 
-
-# ── DB helpers ────────────────────────────────────────────────────────────────
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -84,11 +65,25 @@ def is_valid_email(value: str) -> bool:
     return bool(re.fullmatch(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", (value or "").strip()))
 
 
-_SAFE_IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+def is_production_env() -> bool:
+    checks = [
+        os.environ.get("APP_ENV", ""),
+        os.environ.get("ENVIRONMENT", ""),
+        os.environ.get("ENV", ""),
+        os.environ.get("RAILWAY_ENVIRONMENT", ""),
+    ]
+    return any(v.lower() in {"prod", "production"} for v in checks if v)
+
+
+def bearer_token(authorization: Optional[str]) -> str:
+    if not authorization:
+        return ""
+    if authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return authorization.strip()
 
 
 def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-    # Validate identifiers to prevent SQL injection before using in dynamic DDL
     if not _SAFE_IDENTIFIER_RE.match(table):
         raise ValueError(f"Unsafe table name: {table!r}")
     if not _SAFE_IDENTIFIER_RE.match(column):
@@ -98,25 +93,98 @@ def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, ddl
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def init_profile_db() -> None:
-    """Create Profile and APIKey tables if they don't exist."""
     conn = get_conn()
 
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS profiles (
-            profile_id    TEXT PRIMARY KEY,
-            name          TEXT,
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
             email         TEXT NOT NULL UNIQUE,
             company       TEXT,
             use_case      TEXT,
+            password_hash TEXT,
             verified      INTEGER DEFAULT 0,
-            token_hash    TEXT,
-            token_expires TEXT,
-            created_at    TEXT NOT NULL
+            plan          TEXT DEFAULT 'free',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
         )
-    """)
+        """
+    )
 
-    conn.execute("""
+    profile_cols = table_columns(conn, "profiles")
+    if "profile_id" in profile_cols:
+        conn.execute("UPDATE profiles SET id=profile_id WHERE (id IS NULL OR id='') AND profile_id IS NOT NULL")
+
+    for col, ddl in {
+        "id": "id TEXT",
+        "name": "name TEXT",
+        "company": "company TEXT",
+        "use_case": "use_case TEXT",
+        "password_hash": "password_hash TEXT",
+        "verified": "verified INTEGER DEFAULT 0",
+        "plan": "plan TEXT DEFAULT 'free'",
+        "created_at": "created_at TEXT",
+        "updated_at": "updated_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "profiles", col, ddl)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_verifications (
+            id         TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at    TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS api_keys (
+            key            TEXT PRIMARY KEY,
+            plan           TEXT DEFAULT 'free',
+            scan_count     INTEGER DEFAULT 0,
+            email          TEXT,
+            created        TEXT,
+            key_id         TEXT UNIQUE,
+            profile_id     TEXT,
+            key_hash       TEXT,
+            key_prefix     TEXT,
+            name           TEXT,
+            scopes_json    TEXT,
+            status         TEXT DEFAULT 'active',
+            created_at     TEXT,
+            last_used_at   TEXT,
+            revoked_at     TEXT
+        )
+        """
+    )
+
+    for col, ddl in {
+        "key_id": "key_id TEXT",
+        "profile_id": "profile_id TEXT",
+        "key_hash": "key_hash TEXT",
+        "key_prefix": "key_prefix TEXT",
+        "name": "name TEXT",
+        "scopes_json": "scopes_json TEXT",
+        "status": "status TEXT DEFAULT 'active'",
+        "created_at": "created_at TEXT",
+        "last_used_at": "last_used_at TEXT",
+        "revoked_at": "revoked_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "api_keys", col, ddl)
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS profile_api_keys (
             key_id     TEXT PRIMARY KEY,
             profile_id TEXT NOT NULL,
@@ -124,25 +192,66 @@ def init_profile_db() -> None:
             key_hash   TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL
         )
-    """)
+        """
+    )
 
-    # Safe migrations for older schemas
-    for col, ddl in {
-        "name": "name TEXT",
-        "company": "company TEXT",
-        "use_case": "use_case TEXT",
-    }.items():
-        add_column_if_missing(conn, "profiles", col, ddl)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scan_events (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id      TEXT,
+            api_key_id      TEXT,
+            decision        TEXT,
+            risk_score      REAL,
+            taxonomy_class  TEXT,
+            channel         TEXT,
+            objective       TEXT,
+            trace_id        TEXT,
+            boundary_status TEXT,
+            created_at      TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cross_channel_traces (
+            trace_id           TEXT PRIMARY KEY,
+            profile_id         TEXT,
+            channels_json      TEXT,
+            trust_score        REAL,
+            degradation_score  REAL,
+            final_decision     TEXT,
+            created_at         TEXT NOT NULL,
+            updated_at         TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id    TEXT,
+            action        TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at    TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(lower(email))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_profile_status ON api_keys(profile_id, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_events_profile_created ON scan_events(profile_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_profile ON cross_channel_traces(profile_id, updated_at)")
 
     conn.commit()
     conn.close()
 
 
-# Initialise on import
 init_profile_db()
 
-
-# ── Email helpers ─────────────────────────────────────────────────────────────
 
 def resend_enabled() -> bool:
     return bool(RESEND_API_KEY and RESEND_FROM)
@@ -174,77 +283,112 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
 
 
 def send_verification_email(email: str, raw_token: str) -> bool:
-    verify_url = f"{APP_DASHBOARD_URL}/verify-email?token={raw_token}"
     body = (
-        "<p>Thanks for signing up for MAISB Shield.</p>"
-        "<p>Verify your email address by clicking the link below (valid 24 hours):</p>"
-        f"<p><a href='{html.escape(verify_url)}'>{html.escape(verify_url)}</a></p>"
-        "<p>If you did not sign up, ignore this email.</p>"
-    )
-    return send_resend_email(email, "Verify your MAISB Shield account", body)
-
-
-def send_api_key_email(email: str, raw_key: str) -> bool:
-    body = (
-        "<p>Your MAISB Shield API key was created.</p>"
-        f"<p><b>Key (shown once):</b></p><pre>{html.escape(raw_key)}</pre>"
-        "<p>Store this key securely. Do not commit it to GitHub, "
-        "screenshots, mobile apps, or public reports.</p>"
+        "<p>Thanks for signing up for MAISB.</p>"
+        "<p>Use this verification token in <code>POST /v1/profile/verify-email</code>.</p>"
+        f"<pre>{html.escape(raw_token)}</pre>"
+        "<p>This token expires in 24 hours and can only be used once.</p>"
         f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"
     )
-    return send_resend_email(email, "Your MAISB Shield API key", body)
+    return send_resend_email(email, "Verify your MAISB account", body)
 
 
-# ── Bearer token helper ───────────────────────────────────────────────────────
-
-def bearer_token(authorization: Optional[str]) -> str:
-    if not authorization:
-        return ""
-    if authorization.lower().startswith("bearer "):
-        return authorization.split(" ", 1)[1].strip()
-    return authorization.strip()
+def profile_id_from_row(row: sqlite3.Row) -> str:
+    fallback = row["profile_id"] if "profile_id" in row.keys() else ""
+    return str(row["id"] or fallback or "")
 
 
-def require_profile_by_email(email: str) -> sqlite3.Row:
-    """Return a verified profile row or raise 401."""
+def log_activity(profile_id: str, action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
     conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM profiles WHERE lower(email)=lower(?)",
-        (email,),
-    ).fetchone()
+    conn.execute(
+        "INSERT INTO activity_logs (profile_id, action, metadata_json, created_at) VALUES (?, ?, ?, ?)",
+        (profile_id, action, json.dumps(metadata or {}, separators=(",", ":"), ensure_ascii=False), utcnow()),
+    )
+    conn.commit()
     conn.close()
-    if not row:
-        raise HTTPException(status_code=401, detail="Profile not found. Use POST /v1/profile/signup first.")
-    if not row["verified"]:
-        raise HTTPException(status_code=403, detail="Email not verified. Check your inbox and verify first.")
-    return row
 
 
-def resolve_api_key_from_bearer(authorization: Optional[str]) -> Optional[str]:
-    """
-    Given an Authorization header, return the email associated with the
-    profile_api_keys entry (hashed lookup).  Returns None if not found.
-    """
+def create_session_token(profile_id: str, email: str) -> str:
+    now = dt.datetime.utcnow()
+    payload = {
+        "sub": profile_id,
+        "email": email,
+        "typ": "session",
+        "iat": int(now.timestamp()),
+        "exp": int((now + dt.timedelta(hours=SESSION_TTL_HOURS)).timestamp()),
+    }
+    return jwt.encode(payload, SESSION_SECRET, algorithm="HS256")
+
+
+def resolve_profile_from_bearer(authorization: Optional[str], allow_api_key: bool) -> Tuple[sqlite3.Row, str]:
     token = bearer_token(authorization)
     if not token:
-        return None
-    token_hash = sha256(token)
+        raise HTTPException(status_code=401, detail={"error": "unauthorized", "message": "Authorization: Bearer token required"})
+
     conn = get_conn()
-    row = conn.execute(
-        "SELECT email FROM profile_api_keys WHERE key_hash=?",
-        (token_hash,),
-    ).fetchone()
+
+    try:
+        payload = jwt.decode(token, SESSION_SECRET, algorithms=["HS256"])
+        if payload.get("typ") == "session" and payload.get("sub"):
+            row = conn.execute("SELECT * FROM profiles WHERE id=?", (payload["sub"],)).fetchone()
+            if row and row["verified"]:
+                conn.close()
+                return row, "session"
+    except Exception:
+        pass
+
+    if allow_api_key:
+        key_hash = sha256(token)
+        key_row = conn.execute(
+            "SELECT profile_id, key_id FROM api_keys WHERE key_hash=? AND COALESCE(status,'active')='active'",
+            (key_hash,),
+        ).fetchone()
+        if key_row and key_row["profile_id"]:
+            profile = conn.execute("SELECT * FROM profiles WHERE id=?", (key_row["profile_id"],)).fetchone()
+            if profile:
+                conn.execute("UPDATE api_keys SET last_used_at=? WHERE key_hash=?", (utcnow(), key_hash))
+                conn.commit()
+                conn.close()
+                return profile, "api_key"
+
+        bridge = conn.execute("SELECT profile_id FROM profile_api_keys WHERE key_hash=?", (key_hash,)).fetchone()
+        if bridge:
+            profile = conn.execute("SELECT * FROM profiles WHERE id=?", (bridge["profile_id"],)).fetchone()
+            if profile:
+                conn.close()
+                return profile, "api_key"
+
     conn.close()
-    return row["email"] if row else None
+    raise HTTPException(status_code=401, detail={"error": "unauthorized", "message": "Invalid or expired Bearer token"})
 
 
-# ── Request / response models ─────────────────────────────────────────────────
+def collect_scan_events(profile_id: str, since_iso: Optional[str] = None) -> List[sqlite3.Row]:
+    conn = get_conn()
+    if since_iso:
+        rows = conn.execute(
+            "SELECT * FROM scan_events WHERE profile_id=? AND created_at>=? ORDER BY created_at ASC",
+            (profile_id, since_iso),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM scan_events WHERE profile_id=? ORDER BY created_at ASC", (profile_id,)).fetchall()
+    conn.close()
+    return rows
+
+
+def decision_reason(decision: str) -> str:
+    if decision == "BLOCKED":
+        return "MAISB blocked due to high risk score and policy boundary threshold"
+    if decision == "REVIEW":
+        return "MAISB requested manual review because risk signals crossed review threshold"
+    return "MAISB allowed request because risk remained within acceptable boundaries"
+
 
 class ProfileSignupRequest(BaseModel):
     name: str
     email: str
     company: Optional[str] = None
     use_case: Optional[str] = Field(default="Android / AI agent runtime protection")
+    password: str = Field(min_length=8)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -253,209 +397,767 @@ class VerifyEmailRequest(BaseModel):
 
 class ProfileLoginRequest(BaseModel):
     email: str
+    password: str
 
 
-class CreateApiKeyRequest(BaseModel):
+class PlanSelectRequest(BaseModel):
+    plan: str = Field(pattern="^(free|pro|certify)$")
+
+
+class APIKeyCreateRequest(BaseModel):
+    name: Optional[str] = "Default key"
+    scopes: List[str] = Field(default_factory=lambda: ["scan"])
+
+
+class ComplianceRequest(BaseModel):
+    framework: str = Field(default="soc2")
+
+
+class ScheduleReportRequest(BaseModel):
+    cadence: str = Field(default="weekly", pattern="^(daily|weekly|monthly)$")
+
+
+class TeamInviteRequest(BaseModel):
     email: str
+    role: str = Field(default="viewer")
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+class TeamRolePatchRequest(BaseModel):
+    role: str = Field(default="viewer")
 
-@router.post("/signup")
-def profile_signup(body: ProfileSignupRequest, request: Request) -> Dict[str, Any]:
-    """
-    Create a new profile and send a verification email.
-    Returns profile_id and indicates whether email was sent.
-    """
-    if not body.name or not body.name.strip():
-        raise HTTPException(status_code=422, detail="Name is required")
+
+@router.post("/v1/profile/signup")
+def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
+    if not body.name.strip():
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Name is required"})
     if not is_valid_email(body.email):
-        raise HTTPException(status_code=422, detail="Valid email is required")
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Valid email is required"})
 
     conn = get_conn()
-    existing = conn.execute(
-        "SELECT profile_id, verified FROM profiles WHERE lower(email)=lower(?)",
-        (body.email,),
-    ).fetchone()
+    email = body.email.strip().lower()
+    now = utcnow()
 
+    existing = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+    if existing and existing["verified"]:
+        conn.close()
+        raise HTTPException(status_code=409, detail={"error": "already_exists", "message": "Email already verified. Use /v1/profile/login"})
+
+    profile_id = existing["id"] if existing and existing["id"] else f"prof_{secrets.token_hex(8)}"
+    password_hash = PASSWORD_CTX.hash(body.password)
+
+    cols = table_columns(conn, "profiles")
     if existing:
-        if existing["verified"]:
-            conn.close()
-            raise HTTPException(
-                status_code=409,
-                detail="Email already registered and verified. Use POST /v1/profile/login.",
-            )
-        # Re-send verification for unverified profiles
-        profile_id = existing["profile_id"]
-    else:
-        profile_id = f"prof_{secrets.token_hex(8)}"
-        now = utcnow()
         conn.execute(
-            """
-            INSERT INTO profiles (profile_id, name, email, company, use_case, verified, created_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
-            """,
-            (profile_id, body.name.strip(), body.email.strip(), body.company, body.use_case, now),
+            "UPDATE profiles SET name=?, company=?, use_case=?, password_hash=?, updated_at=? WHERE lower(email)=lower(?)",
+            (body.name.strip(), body.company, body.use_case, password_hash, now, email),
         )
+    else:
+        if "profile_id" in cols:
+            conn.execute(
+                "INSERT INTO profiles (id, profile_id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
+                (profile_id, profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO profiles (id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
+                (profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+            )
 
-    # Generate a single-use verification token (store SHA256 hash)
     raw_token = secrets.token_urlsafe(32)
     token_hash = sha256(raw_token)
-    token_expires = (dt.datetime.utcnow() + dt.timedelta(hours=TOKEN_EXPIRY_HOURS)).isoformat()
+    verification_id = f"ver_{secrets.token_hex(10)}"
+    expires_at = (dt.datetime.utcnow() + dt.timedelta(hours=TOKEN_EXPIRY_HOURS)).isoformat()
 
     conn.execute(
-        "UPDATE profiles SET token_hash=?, token_expires=? WHERE profile_id=?",
-        (token_hash, token_expires, profile_id),
+        "INSERT INTO email_verifications (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+        (verification_id, profile_id, token_hash, expires_at, now),
     )
     conn.commit()
     conn.close()
 
-    email_sent = send_verification_email(body.email.strip(), raw_token)
-
-    return {
+    email_sent = send_verification_email(email, raw_token)
+    response: Dict[str, Any] = {
         "created": True,
+        "status": "pending_verification",
         "profile_id": profile_id,
-        "email": body.email.strip(),
-        "verified": False,
-        "next_step": "Check your inbox and click the verification link, then POST /v1/profile/login",
+        "email": email,
         "email_sent": email_sent,
     }
+    if not email_sent and not is_production_env() and not resend_enabled():
+        response["dev_verification_token"] = raw_token
+
+    log_activity(profile_id, "profile_signup", {"email": email, "email_sent": email_sent})
+    return response
 
 
-@router.post("/verify-email")
+@router.post("/v1/profile/verify-email")
 def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
-    """
-    Verify a profile using the raw token from the email link.
-    Token is in the POST body (never in URLs for security).
-    """
-    if not body.token:
-        raise HTTPException(status_code=422, detail="Token is required")
+    if not body.token.strip():
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Token is required"})
 
-    token_hash = sha256(body.token)
-    now_str = dt.datetime.utcnow().isoformat()
+    token_hash = sha256(body.token.strip())
+    now = dt.datetime.utcnow().isoformat()
+
     conn = get_conn()
     row = conn.execute(
-        "SELECT * FROM profiles WHERE token_hash=?",
+        "SELECT * FROM email_verifications WHERE token_hash=? AND used_at IS NULL ORDER BY created_at DESC LIMIT 1",
         (token_hash,),
     ).fetchone()
 
     if not row:
         conn.close()
-        raise HTTPException(status_code=400, detail="Invalid or already-used verification token")
-    if row["token_expires"] and row["token_expires"] < now_str:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Verification token has expired. Request a new one via signup.")
-    if row["verified"]:
-        conn.close()
-        return {"verified": True, "email": row["email"], "already_verified": True}
+        raise HTTPException(status_code=400, detail={"error": "invalid_token", "message": "Invalid or already-used verification token"})
 
-    # Mark verified and clear the token (single-use)
-    conn.execute(
-        "UPDATE profiles SET verified=1, token_hash=NULL, token_expires=NULL WHERE profile_id=?",
-        (row["profile_id"],),
-    )
+    if row["expires_at"] < now:
+        conn.close()
+        raise HTTPException(status_code=400, detail={"error": "token_expired", "message": "Verification token expired"})
+
+    conn.execute("UPDATE email_verifications SET used_at=? WHERE id=?", (utcnow(), row["id"]))
+    conn.execute("UPDATE profiles SET verified=1, updated_at=? WHERE id=?", (utcnow(), row["profile_id"]))
+    email_row = conn.execute("SELECT email FROM profiles WHERE id=?", (row["profile_id"],)).fetchone()
     conn.commit()
     conn.close()
 
+    log_activity(row["profile_id"], "profile_verify_email", {"email": email_row["email"] if email_row else None})
+    return {"verified": True, "email": email_row["email"] if email_row else None}
+
+
+@router.post("/v1/profile/login")
+def profile_login(body: ProfileLoginRequest) -> Dict[str, Any]:
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Valid email is required"})
+
+    conn = get_conn()
+    profile = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (body.email.strip().lower(),)).fetchone()
+    conn.close()
+
+    if not profile:
+        raise HTTPException(status_code=401, detail={"error": "invalid_credentials", "message": "Invalid email or password"})
+    if not profile["password_hash"] or not PASSWORD_CTX.verify(body.password, profile["password_hash"]):
+        raise HTTPException(status_code=401, detail={"error": "invalid_credentials", "message": "Invalid email or password"})
+    if not profile["verified"]:
+        raise HTTPException(status_code=403, detail={"error": "email_not_verified", "message": "Verify your email before login"})
+
+    token = create_session_token(profile["id"], profile["email"])
+    log_activity(profile["id"], "profile_login", {"email": profile["email"]})
     return {
-        "verified": True,
-        "email": row["email"],
-        "next_step": "POST /v1/profile/login",
+        "token_type": "Bearer",
+        "session_token": token,
+        "expires_in_seconds": SESSION_TTL_HOURS * 3600,
+        "profile": {
+            "id": profile["id"],
+            "name": profile["name"],
+            "email": profile["email"],
+            "company": profile["company"],
+            "use_case": profile["use_case"],
+            "verified": bool(profile["verified"]),
+            "plan": profile["plan"] or "free",
+        },
     }
 
 
-@router.post("/login")
-def profile_login(body: ProfileLoginRequest) -> Dict[str, Any]:
-    """
-    Login by email. Returns profile data and whether a key exists.
-    """
-    if not is_valid_email(body.email):
-        raise HTTPException(status_code=422, detail="Valid email is required")
-
-    profile = require_profile_by_email(body.email)
-    conn = get_conn()
-    key_count = conn.execute(
-        "SELECT COUNT(*) AS c FROM profile_api_keys WHERE lower(email)=lower(?)",
-        (body.email,),
-    ).fetchone()["c"]
-    conn.close()
-
+@router.get("/v1/profile/me")
+def profile_me(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, auth_type = resolve_profile_from_bearer(authorization, allow_api_key=True)
     return {
-        "profile_id": profile["profile_id"],
+        "id": profile["id"],
         "name": profile["name"],
         "email": profile["email"],
         "company": profile["company"],
         "use_case": profile["use_case"],
         "verified": bool(profile["verified"]),
-        "created_at": profile["created_at"],
-        "has_api_key": key_count > 0,
-        "next_step": "POST /v1/profile/api-keys" if key_count == 0 else "Use Bearer token in API requests",
+        "plan": profile["plan"] or "free",
+        "auth_type": auth_type,
     }
 
 
-@router.post("/api-keys")
-def profile_create_api_key(body: CreateApiKeyRequest) -> Dict[str, Any]:
-    """
-    Generate a new API key for a verified profile.
-    The raw key is returned ONCE and never stored in plaintext.
-    """
-    if not is_valid_email(body.email):
-        raise HTTPException(status_code=422, detail="Valid email is required")
-
-    profile = require_profile_by_email(body.email)
-
-    raw_key = f"maisb_live_{secrets.token_urlsafe(32)}"
-    key_hash = sha256(raw_key)
-    key_id = f"key_{secrets.token_hex(8)}"
-    now = utcnow()
+@router.get("/v1/profile/status")
+def profile_status(email: str = Query(...)) -> Dict[str, Any]:
+    if not is_valid_email(email):
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Valid email is required"})
 
     conn = get_conn()
-    # Check for existing keys — allow generating additional keys
-    conn.execute(
-        """
-        INSERT INTO profile_api_keys (key_id, profile_id, email, key_hash, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (key_id, profile["profile_id"], body.email.strip(), key_hash, now),
-    )
-    conn.commit()
+    row = conn.execute("SELECT id, verified, plan, created_at, updated_at FROM profiles WHERE lower(email)=lower(?)", (email.strip().lower(),)).fetchone()
     conn.close()
 
-    send_api_key_email(body.email.strip(), raw_key)
-
+    if not row:
+        return {"exists": False, "email": email.strip().lower()}
     return {
-        "key_id": key_id,
-        "raw_key": raw_key,
-        "email": body.email.strip(),
-        "created_at": now,
-        "warning": (
-            "Copy this key now — it will not be shown again. "
-            "Store securely. Do not commit to GitHub or screenshots."
-        ),
+        "exists": True,
+        "email": email.strip().lower(),
+        "verified": bool(row["verified"]),
+        "plan": row["plan"] or "free",
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
     }
 
 
-@router.get("/keys")
-def profile_list_keys(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    """
-    List API keys (masked) for the authenticated profile.
-    Requires Bearer token in Authorization header.
-    """
-    email = resolve_api_key_from_bearer(authorization)
-    if not email:
-        raise HTTPException(status_code=401, detail="Valid Bearer token required")
+@router.get("/v1/plans")
+def get_plans() -> Dict[str, Any]:
+    return {
+        "plans": [
+            {"code": "free", "name": "Free", "selected": False, "coming_soon": False},
+            {"code": "pro", "name": "Pro", "selected": False, "coming_soon": True, "request_invoice": True},
+            {"code": "certify", "name": "Certify", "selected": False, "coming_soon": True, "request_invoice": True},
+        ]
+    }
 
+
+@router.post("/v1/plans/select")
+def select_plan(body: PlanSelectRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    selected_plan = body.plan.lower()
+
+    if selected_plan == "free":
+        conn = get_conn()
+        conn.execute("UPDATE profiles SET plan='free', updated_at=? WHERE id=?", (utcnow(), profile["id"]))
+        conn.commit()
+        conn.close()
+        log_activity(profile["id"], "plan_select", {"plan": "free"})
+        return {"plan": "free", "selected": True, "coming_soon": False}
+
+    log_activity(profile["id"], "plan_select", {"plan": selected_plan, "coming_soon": True})
+    return {
+        "plan": selected_plan,
+        "selected": False,
+        "coming_soon": True,
+        "request_invoice": True,
+        "message": "Online checkout is being configured. Request invoice/contact sales.",
+    }
+
+
+@router.get("/v1/api-keys")
+def list_api_keys(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
     conn = get_conn()
     rows = conn.execute(
-        "SELECT key_id, email, created_at FROM profile_api_keys WHERE lower(email)=lower(?)",
-        (email,),
+        "SELECT key_id, key_prefix, name, scopes_json, status, created_at, last_used_at, revoked_at FROM api_keys WHERE profile_id=? ORDER BY created_at DESC",
+        (profile["id"],),
     ).fetchall()
     conn.close()
 
     return {
-        "email": email,
-        "keys": [
-            {"key_id": r["key_id"], "email": r["email"], "created_at": r["created_at"]}
+        "api_keys": [
+            {
+                "key_id": r["key_id"],
+                "key_prefix": r["key_prefix"],
+                "name": r["name"] or "Default key",
+                "scopes": json.loads(r["scopes_json"] or "[]"),
+                "status": r["status"] or "active",
+                "created_at": r["created_at"],
+                "last_used_at": r["last_used_at"],
+                "revoked_at": r["revoked_at"],
+            }
             for r in rows
+            if r["key_id"]
+        ]
+    }
+
+
+@router.post("/v1/api-keys")
+def create_api_key(body: APIKeyCreateRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    conn = get_conn()
+
+    active_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM api_keys WHERE profile_id=? AND COALESCE(status,'active')='active'",
+        (profile["id"],),
+    ).fetchone()["c"]
+
+    if (profile["plan"] or "free") == "free" and active_count >= 1:
+        conn.close()
+        raise HTTPException(status_code=403, detail={"error": "free_plan_limit", "message": "Free plan allows first API key generation only"})
+
+    raw_key = f"maisb_live_{secrets.token_urlsafe(32)}"
+    key_hash = sha256(raw_key)
+    key_id = f"key_{secrets.token_hex(8)}"
+    key_prefix = raw_key[:14]
+    now = utcnow()
+
+    conn.execute(
+        "INSERT INTO api_keys (key, plan, scan_count, email, created, key_id, profile_id, key_hash, key_prefix, name, scopes_json, status, created_at) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+        (
+            key_hash,
+            profile["plan"] or "free",
+            profile["email"],
+            now,
+            key_id,
+            profile["id"],
+            key_hash,
+            key_prefix,
+            (body.name or "Default key").strip() or "Default key",
+            json.dumps(body.scopes, separators=(",", ":"), ensure_ascii=False),
+            now,
+        ),
+    )
+
+    conn.execute(
+        "INSERT OR REPLACE INTO profile_api_keys (key_id, profile_id, email, key_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+        (key_id, profile["id"], profile["email"], key_hash, now),
+    )
+    conn.commit()
+    conn.close()
+
+    log_activity(profile["id"], "api_key_create", {"key_id": key_id, "name": body.name, "scopes": body.scopes})
+
+    return {
+        "key_id": key_id,
+        "api_key": raw_key,
+        "key_prefix": key_prefix,
+        "name": (body.name or "Default key").strip() or "Default key",
+        "scopes": body.scopes,
+        "status": "active",
+        "created_at": now,
+        "warning": "Copy this API key now. It is shown only once.",
+    }
+
+
+@router.post("/v1/api-keys/{key_id}/rotate")
+def rotate_api_key(key_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT key_id FROM api_keys WHERE key_id=? AND profile_id=? AND COALESCE(status,'active')='active'",
+        (key_id, profile["id"]),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "API key not found"})
+
+    now = utcnow()
+    conn.execute("UPDATE api_keys SET status='revoked', revoked_at=?, last_used_at=? WHERE key_id=?", (now, now, key_id))
+    conn.execute("DELETE FROM profile_api_keys WHERE key_id=?", (key_id,))
+    conn.commit()
+    conn.close()
+
+    created = create_api_key(APIKeyCreateRequest(name="Rotated key", scopes=["scan"]), authorization)
+    log_activity(profile["id"], "api_key_rotate", {"old_key_id": key_id, "new_key_id": created["key_id"]})
+    return {"rotated": True, "old_key_id": key_id, "new": created}
+
+
+@router.post("/v1/api-keys/{key_id}/revoke")
+def revoke_api_key(key_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    now = utcnow()
+
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT key_id FROM api_keys WHERE key_id=? AND profile_id=? AND COALESCE(status,'active')='active'",
+        (key_id, profile["id"]),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "API key not found"})
+
+    conn.execute("UPDATE api_keys SET status='revoked', revoked_at=?, last_used_at=? WHERE key_id=?", (now, now, key_id))
+    conn.execute("DELETE FROM profile_api_keys WHERE key_id=?", (key_id,))
+    conn.commit()
+    conn.close()
+
+    log_activity(profile["id"], "api_key_revoke", {"key_id": key_id})
+    return {"revoked": True, "key_id": key_id, "revoked_at": now}
+
+
+@router.get("/v1/api-keys/{key_id}/usage")
+def api_key_usage(key_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    conn = get_conn()
+    key = conn.execute(
+        "SELECT key_id, key_hash, status, created_at, last_used_at FROM api_keys WHERE key_id=? AND profile_id=?",
+        (key_id, profile["id"]),
+    ).fetchone()
+    if not key:
+        conn.close()
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "API key not found"})
+
+    counts = conn.execute(
+        "SELECT COUNT(*) AS total, SUM(CASE WHEN decision='BLOCKED' THEN 1 ELSE 0 END) AS blocked, MAX(created_at) AS last_scan FROM scan_events WHERE profile_id=? AND api_key_id=?",
+        (profile["id"], key_id),
+    ).fetchone()
+    conn.close()
+
+    return {
+        "key_id": key_id,
+        "status": key["status"] or "active",
+        "created_at": key["created_at"],
+        "last_used_at": key["last_used_at"],
+        "usage": {
+            "total_scans": int((counts["total"] or 0) if counts else 0),
+            "blocked": int((counts["blocked"] or 0) if counts else 0),
+            "last_scan_at": counts["last_scan"] if counts else None,
+        },
+    }
+
+
+def _summary_from_events(events: List[sqlite3.Row]) -> Dict[str, Any]:
+    total = len(events)
+    blocked = sum(1 for r in events if (r["decision"] or "").upper() == "BLOCKED")
+    review = sum(1 for r in events if (r["decision"] or "").upper() == "REVIEW")
+    allowed = sum(1 for r in events if (r["decision"] or "").upper() == "ALLOWED")
+    avg_risk = round(sum(float(r["risk_score"] or 0) for r in events) / total, 4) if total else 0.0
+    return {
+        "total_scans": total,
+        "blocked": blocked,
+        "review": review,
+        "allowed": allowed,
+        "avg_risk_score": avg_risk,
+    }
+
+
+@router.get("/v1/dashboard/analytics/scans-over-time")
+def scans_over_time(range: str = Query("weekly", pattern="^(weekly|monthly)$"), authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    days = 7 if range == "weekly" else 30
+    since = (dt.datetime.utcnow() - dt.timedelta(days=days)).isoformat()
+    events = collect_scan_events(profile["id"], since)
+
+    buckets: Dict[str, int] = {}
+    for row in events:
+        day = (row["created_at"] or "")[:10]
+        if day:
+            buckets[day] = buckets.get(day, 0) + 1
+
+    return {"range": range, "points": [{"date": d, "count": buckets[d]} for d in sorted(buckets.keys())]}
+
+
+@router.get("/v1/dashboard/analytics/decision-breakdown")
+def decision_breakdown(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+    result: Dict[str, int] = {"ALLOWED": 0, "REVIEW": 0, "BLOCKED": 0}
+    for row in events:
+        key = (row["decision"] or "ALLOWED").upper()
+        result[key] = result.get(key, 0) + 1
+    return {"decisions": result}
+
+
+@router.get("/v1/dashboard/analytics/risk-distribution")
+def risk_distribution(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+    bins = {"0.0-0.24": 0, "0.25-0.49": 0, "0.50-0.74": 0, "0.75-1.00": 0}
+    for row in events:
+        score = float(row["risk_score"] or 0)
+        if score < 0.25:
+            bins["0.0-0.24"] += 1
+        elif score < 0.5:
+            bins["0.25-0.49"] += 1
+        elif score < 0.75:
+            bins["0.50-0.74"] += 1
+        else:
+            bins["0.75-1.00"] += 1
+    return {"distribution": bins}
+
+
+@router.get("/v1/dashboard/analytics/top-risk-channels")
+def top_risk_channels(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+    agg: Dict[str, Dict[str, Any]] = {}
+    for row in events:
+        channel = row["channel"] or "unknown"
+        item = agg.setdefault(channel, {"channel": channel, "count": 0, "risk_sum": 0.0})
+        item["count"] += 1
+        item["risk_sum"] += float(row["risk_score"] or 0)
+
+    ranked = []
+    for item in agg.values():
+        count = max(1, int(item["count"]))
+        ranked.append({"channel": item["channel"], "count": item["count"], "avg_risk": round(item["risk_sum"] / count, 4)})
+
+    ranked.sort(key=lambda x: (-x["avg_risk"], -x["count"], x["channel"]))
+    return {"channels": ranked[:5]}
+
+
+@router.get("/v1/dashboard/security/risk-timeline")
+def risk_timeline(range: str = Query("weekly", pattern="^(weekly|monthly)$"), authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    days = 7 if range == "weekly" else 30
+    since = (dt.datetime.utcnow() - dt.timedelta(days=days)).isoformat()
+    events = collect_scan_events(profile["id"], since)
+
+    timeline = []
+    for row in events[-100:]:
+        timeline.append({"created_at": row["created_at"], "risk_score": float(row["risk_score"] or 0), "decision": row["decision"]})
+    return {"range": range, "timeline": timeline}
+
+
+@router.get("/v1/dashboard/security/blocked-payloads")
+def blocked_payloads(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = [r for r in collect_scan_events(profile["id"]) if (r["decision"] or "").upper() == "BLOCKED"]
+
+    items = []
+    for row in events[-100:]:
+        items.append(
+            {
+                "event_id": row["id"],
+                "trace_id": row["trace_id"],
+                "channel": row["channel"],
+                "objective": row["objective"],
+                "risk_score": row["risk_score"],
+                "taxonomy_class": row["taxonomy_class"],
+                "boundary_status": row["boundary_status"],
+                "created_at": row["created_at"],
+                "payload_hash": None,
+                "redacted_preview": None,
+            }
+        )
+    return {"items": items}
+
+
+@router.get("/v1/dashboard/security/channel-reputation")
+def channel_reputation(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+    by_channel: Dict[str, Dict[str, Any]] = {}
+    for row in events:
+        channel = row["channel"] or "unknown"
+        item = by_channel.setdefault(channel, {"channel": channel, "events": 0, "blocked": 0, "trust_sum": 0.0})
+        item["events"] += 1
+        if (row["decision"] or "").upper() == "BLOCKED":
+            item["blocked"] += 1
+        item["trust_sum"] += 1.0 - float(row["risk_score"] or 0)
+
+    result = []
+    for item in by_channel.values():
+        events_count = max(1, item["events"])
+        result.append(
+            {
+                "channel": item["channel"],
+                "events": item["events"],
+                "blocked": item["blocked"],
+                "trust_score": round(item["trust_sum"] / events_count, 4),
+            }
+        )
+    result.sort(key=lambda x: (x["trust_score"], -x["events"], x["channel"]))
+    return {"channels": result}
+
+
+@router.get("/v1/dashboard/security/trust-degradation")
+def trust_degradation(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    conn = get_conn()
+    traces = conn.execute(
+        "SELECT trace_id, channels_json, trust_score, degradation_score, final_decision, created_at, updated_at FROM cross_channel_traces WHERE profile_id=? ORDER BY updated_at DESC LIMIT 100",
+        (profile["id"],),
+    ).fetchall()
+    conn.close()
+
+    return {
+        "traces": [
+            {
+                "trace_id": r["trace_id"],
+                "channels": json.loads(r["channels_json"] or "[]"),
+                "trust_score": r["trust_score"],
+                "degradation_score": r["degradation_score"],
+                "final_decision": r["final_decision"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in traces
+        ]
+    }
+
+
+@router.get("/v1/dashboard/traces")
+def list_traces(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT trace_id, channels_json, trust_score, degradation_score, final_decision, created_at, updated_at FROM cross_channel_traces WHERE profile_id=? ORDER BY updated_at DESC LIMIT 200",
+        (profile["id"],),
+    ).fetchall()
+    conn.close()
+
+    return {
+        "traces": [
+            {
+                "trace_id": r["trace_id"],
+                "channels": json.loads(r["channels_json"] or "[]"),
+                "trust_degradation": r["degradation_score"],
+                "final_decision": r["final_decision"],
+                "why": decision_reason((r["final_decision"] or "ALLOWED").upper()),
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.get("/v1/dashboard/traces/{trace_id}")
+def trace_detail(trace_id: str, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT trace_id, channels_json, trust_score, degradation_score, final_decision, created_at, updated_at FROM cross_channel_traces WHERE trace_id=? AND profile_id=?",
+        (trace_id, profile["id"]),
+    ).fetchone()
+    events = conn.execute(
+        "SELECT id, decision, risk_score, taxonomy_class, channel, objective, boundary_status, created_at FROM scan_events WHERE trace_id=? AND profile_id=? ORDER BY created_at ASC",
+        (trace_id, profile["id"]),
+    ).fetchall()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Trace not found"})
+
+    final_decision = (row["final_decision"] or "ALLOWED").upper()
+    return {
+        "trace_id": row["trace_id"],
+        "channels": json.loads(row["channels_json"] or "[]"),
+        "boundary_events": [
+            {
+                "event_id": e["id"],
+                "decision": e["decision"],
+                "risk_score": e["risk_score"],
+                "taxonomy_class": e["taxonomy_class"],
+                "channel": e["channel"],
+                "objective": e["objective"],
+                "boundary_status": e["boundary_status"],
+                "created_at": e["created_at"],
+            }
+            for e in events
         ],
+        "trust_score": row["trust_score"],
+        "trust_degradation": row["degradation_score"],
+        "final_decision": final_decision,
+        "why": decision_reason(final_decision),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@router.get("/v1/reports/export.csv")
+def export_report_csv(authorization: Optional[str] = Header(None)):
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=["id", "decision", "risk_score", "taxonomy_class", "channel", "objective", "trace_id", "boundary_status", "created_at"])
+    writer.writeheader()
+    for row in events:
+        writer.writerow(
+            {
+                "id": row["id"],
+                "decision": row["decision"],
+                "risk_score": row["risk_score"],
+                "taxonomy_class": row["taxonomy_class"],
+                "channel": row["channel"],
+                "objective": row["objective"],
+                "trace_id": row["trace_id"],
+                "boundary_status": row["boundary_status"],
+                "created_at": row["created_at"],
+            }
+        )
+
+    return PlainTextResponse(
+        out.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=maisb_report.csv"},
+    )
+
+
+@router.get("/v1/reports/export.json")
+def export_report_json(authorization: Optional[str] = Header(None)):
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+    return JSONResponse(
+        {
+            "profile_id": profile["id"],
+            "generated_at": utcnow(),
+            "events": [
+                {
+                    "id": row["id"],
+                    "decision": row["decision"],
+                    "risk_score": row["risk_score"],
+                    "taxonomy_class": row["taxonomy_class"],
+                    "channel": row["channel"],
+                    "objective": row["objective"],
+                    "trace_id": row["trace_id"],
+                    "boundary_status": row["boundary_status"],
+                    "created_at": row["created_at"],
+                }
+                for row in events
+            ],
+        }
+    )
+
+
+@router.post("/v1/reports/compliance")
+def compliance_report(body: ComplianceRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    events = collect_scan_events(profile["id"])
+    report_id = f"compliance_{secrets.token_hex(6)}"
+    summary = _summary_from_events(events)
+    log_activity(profile["id"], "report_compliance", {"framework": body.framework, "report_id": report_id})
+    return {
+        "report_id": report_id,
+        "framework": body.framework,
+        "generated_at": utcnow(),
+        "summary": summary,
+        "status": "ready",
+    }
+
+
+@router.post("/v1/reports/schedule")
+def schedule_report(body: ScheduleReportRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    schedule_id = f"sched_{secrets.token_hex(6)}"
+    log_activity(profile["id"], "report_schedule", {"cadence": body.cadence, "schedule_id": schedule_id})
+    return {
+        "schedule_id": schedule_id,
+        "cadence": body.cadence,
+        "status": "scheduled",
+        "note": "MVP scheduler accepted. Delivery integrations can be expanded later.",
+    }
+
+
+@router.get("/v1/team")
+def get_team(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=True)
+    return {
+        "team": [
+            {
+                "member_id": profile["id"],
+                "email": profile["email"],
+                "name": profile["name"],
+                "role": "owner",
+                "status": "active",
+            }
+        ],
+        "plan": profile["plan"] or "free",
+        "enterprise_actions": {"coming_soon": True},
+    }
+
+
+@router.post("/v1/team/invite")
+def team_invite(body: TeamInviteRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    if not is_valid_email(body.email):
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Valid email is required"})
+
+    invite_id = f"invite_{secrets.token_hex(6)}"
+    log_activity(profile["id"], "team_invite", {"invite_id": invite_id, "email": body.email, "role": body.role})
+    return {
+        "invited": True,
+        "invite_id": invite_id,
+        "email": body.email,
+        "role": body.role,
+        "status": "pending",
+        "message": "MVP invite recorded for Free plan. Enterprise workflows remain coming soon.",
+    }
+
+
+@router.patch("/v1/team/{member_id}/role")
+def team_role_patch(member_id: str, body: TeamRolePatchRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
+    log_activity(profile["id"], "team_role_patch", {"member_id": member_id, "role": body.role})
+    return {
+        "member_id": member_id,
+        "role": body.role,
+        "coming_soon": True,
+        "message": "Online team role management is being configured for enterprise workspaces.",
     }

@@ -869,6 +869,12 @@ def new_event_id() -> str:
     return f"event_{secrets.token_hex(8)}"
 
 
+def _merge_channels_json(existing_json: Any, channel: str) -> str:
+    channels = set(jload(existing_json, []))
+    channels.add(channel)
+    return jdump(sorted(channels))
+
+
 def log_scan(
     api_key: str,
     decision: str,
@@ -883,6 +889,7 @@ def log_scan(
     event_id: Optional[str] = None,
 ) -> None:
     conn = get_conn()
+    created_at = utcnow()
     conn.execute(
         """
         INSERT INTO scans
@@ -897,7 +904,7 @@ def log_scan(
             channel,
             objective,
             ms,
-            utcnow(),
+            created_at,
             tenant_id,
             session_id,
             trace_id,
@@ -905,6 +912,80 @@ def log_scan(
         ),
     )
     conn.execute("UPDATE api_keys SET scan_count = scan_count + 1 WHERE key = ?", (api_key,))
+
+    # SaaS metadata mirrors (no raw payload stored). Best-effort only to preserve scan behavior.
+    try:
+        key_row = conn.execute(
+            "SELECT key_id, profile_id FROM api_keys WHERE key = ?",
+            (api_key,),
+        ).fetchone()
+        profile_id = key_row["profile_id"] if key_row and "profile_id" in key_row.keys() else None
+        api_key_id = key_row["key_id"] if key_row and "key_id" in key_row.keys() else None
+
+        if profile_id:
+            conn.execute(
+                """
+                INSERT INTO scan_events
+                (profile_id, api_key_id, decision, risk_score, taxonomy_class, channel, objective, trace_id, boundary_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    profile_id,
+                    api_key_id,
+                    decision,
+                    risk_score,
+                    taxonomy,
+                    channel,
+                    objective,
+                    trace_id,
+                    decision,
+                    created_at,
+                ),
+            )
+            if trace_id:
+                existing_trace = conn.execute(
+                    "SELECT channels_json, created_at FROM cross_channel_traces WHERE trace_id = ?",
+                    (trace_id,),
+                ).fetchone()
+                trust_score = round(max(0.0, 1.0 - float(risk_score or 0.0)), 4)
+                degradation_score = round(min(1.0, float(risk_score or 0.0)), 4)
+                if existing_trace:
+                    conn.execute(
+                        """
+                        UPDATE cross_channel_traces
+                        SET profile_id=?, channels_json=?, trust_score=?, degradation_score=?, final_decision=?, updated_at=?
+                        WHERE trace_id=?
+                        """,
+                        (
+                            profile_id,
+                            _merge_channels_json(existing_trace["channels_json"], channel),
+                            trust_score,
+                            degradation_score,
+                            decision,
+                            created_at,
+                            trace_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO cross_channel_traces
+                        (trace_id, profile_id, channels_json, trust_score, degradation_score, final_decision, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            trace_id,
+                            profile_id,
+                            jdump([channel]),
+                            trust_score,
+                            degradation_score,
+                            decision,
+                            created_at,
+                            created_at,
+                        ),
+                    )
+    except sqlite3.Error:
+        pass
     conn.commit()
     conn.close()
 
