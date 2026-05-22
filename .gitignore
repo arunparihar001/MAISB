@@ -47,3 +47,9 @@ apk_info_now.txt
 
 # Editor
 .vscode/
+
+# Node.js
+node_modules/
+dist/
+*.tsbuildinfo
+tsconfig.tsbuildinfo

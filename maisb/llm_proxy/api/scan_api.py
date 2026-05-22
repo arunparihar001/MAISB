@@ -218,6 +218,10 @@ include_optional_router("api.signup", "legacy_signup")
 include_optional_router("api.certify", "legacy_certify")
 include_optional_router("api.billing", "legacy_billing")
 
+# ── Enterprise sub-routers (profile auth + public info) ─────────────────────
+include_optional_router("api.profile_routes", "profile_routes")
+include_optional_router("api.public_routes", "public_routes")
+
 # ── Database helpers ─────────────────────────────────────────────────────────
 
 def utcnow() -> str:
@@ -657,7 +661,7 @@ class ScanRequestBody(BaseModel):
     payload: str
     channel: str = "unknown"
     objective: str = "general"
-    api_key: str
+    api_key: Optional[str] = None
     session_id: Optional[str] = None
     tenant_id: str = DEFAULT_TENANT_ID
 
@@ -750,6 +754,57 @@ def require_admin(admin_key: Optional[str] = None, authorization: Optional[str] 
     token = bearer_token(authorization) or (admin_key or "")
     if not secrets.compare_digest(token.encode(), (ADMIN_KEY or "").encode()):
         raise HTTPException(status_code=403, detail="Forbidden: valid admin token required")
+
+
+def resolve_scan_api_key(body_key: Optional[str], authorization: Optional[str]) -> str:
+    """
+    Resolve the API key to use for a scan request.
+    Priority:
+      1. Bearer token from Authorization header (new profile_api_keys — SHA256 lookup)
+      2. api_key in request body (legacy / Android SDK compatibility)
+    Returns the canonical key string for use with get_key_info / enforce_quota.
+    """
+    token = bearer_token(authorization)
+    if token:
+        token_hash = sha256(token)
+        conn = get_conn()
+        # Check new profile_api_keys table (hashed)
+        row = conn.execute(
+            "SELECT email FROM profile_api_keys WHERE key_hash=?",
+            (token_hash,),
+        ).fetchone()
+        if row:
+            email = row["email"]
+            # Ensure a corresponding entry exists in api_keys for quota tracking
+            existing = conn.execute(
+                "SELECT key FROM api_keys WHERE key=?",
+                (token_hash,),
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT OR IGNORE INTO api_keys (key, plan, scan_count, email, created) VALUES (?, 'free', 0, ?, ?)",
+                    (token_hash, email, utcnow()),
+                )
+                conn.commit()
+            conn.close()
+            return token_hash  # Use hash as canonical key for quota purposes
+
+        # Also check legacy api_keys table for any Bearer tokens issued there
+        legacy = conn.execute(
+            "SELECT key FROM api_keys WHERE key=?",
+            (token,),
+        ).fetchone()
+        conn.close()
+        if legacy:
+            return token
+
+    if body_key:
+        return body_key
+
+    raise HTTPException(
+        status_code=401,
+        detail="API key required. Use Authorization: Bearer YOUR_KEY header or include api_key in request body.",
+    )
 
 
 def signup_count_for_email_today(conn: sqlite3.Connection, email: str) -> int:
@@ -883,7 +938,7 @@ def health() -> Dict[str, Any]:
         "commercial": True,
         "self_serve_signup": True,
         "certify": True,
-        "paddle_billing": bool(PADDLE_ENABLED),
+        "profile_auth": bool(ROUTER_STATUS.get("profile_routes", {}).get("loaded")),
         "resend_configured": bool(resend_enabled()),
         "pipeline_ready": PIPELINE_IMPORT_ERROR is None,
         "pipeline_fallback_active": PIPELINE_IMPORT_ERROR is not None,
@@ -925,24 +980,28 @@ def root() -> Dict[str, Any]:
 
 
 @app.post("/v1/scan", response_model=ScanResponseBody, tags=["Scan"])
-def scan(body: ScanRequestBody, request: Request) -> ScanResponseBody:
+def scan(body: ScanRequestBody, request: Request, authorization: Optional[str] = Header(None)) -> ScanResponseBody:
     """
     Scan a payload before it reaches the LLM.
 
-    Compatible with the Android SDK:
-    - body.api_key
+    Auth (choose one):
+    - Authorization: Bearer <api_key>   (preferred — new profile keys and legacy keys)
+    - body.api_key                       (legacy / Android SDK compatibility)
+
+    Additional request fields:
     - body.tenant_id
     - X-Tenant-ID header
     - session_id
     """
-    enforce_quota(body.api_key)
+    api_key = resolve_scan_api_key(body.api_key, authorization)
+    enforce_quota(api_key)
 
     started = time.time()
     result = run_pipeline(PipelineScanRequest(
         payload=body.payload,
         channel=body.channel,
         objective=body.objective,
-        api_key=body.api_key,
+        api_key=api_key,
         session_id=body.session_id,
     ))
 
@@ -952,7 +1011,7 @@ def scan(body: ScanRequestBody, request: Request) -> ScanResponseBody:
     processing_ms = int(getattr(result, "processing_ms", int((time.time() - started) * 1000)) or 0)
 
     log_scan(
-        api_key=body.api_key,
+        api_key=api_key,
         decision=str(getattr(result, "decision", "REVIEW")),
         risk_score=float(getattr(result, "risk_score", 0.5)),
         taxonomy=str(getattr(result, "taxonomy_class", "UNKNOWN")),
@@ -1057,13 +1116,21 @@ def public_signup(body: PublicSignupRequest, request: Request) -> Dict[str, Any]
 
 
 @app.get("/v1/public/usage", tags=["Public Signup"])
-def public_usage(api_key: str = Query(...)) -> Dict[str, Any]:
-    return usage(api_key)
+def public_usage(
+    api_key: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    resolved = resolve_scan_api_key(api_key, authorization)
+    return usage(resolved)
 
 
 @app.get("/v1/public/dashboard", tags=["Public Signup"])
-def public_customer_dashboard(api_key: str = Query(...)) -> Dict[str, Any]:
-    u = usage(api_key)
+def public_customer_dashboard(
+    api_key: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    resolved = resolve_scan_api_key(api_key, authorization)
+    u = usage(resolved)
     return {
         "customer": {
             "email": u.get("email"),
@@ -1531,11 +1598,9 @@ def commercial_health() -> Dict[str, Any]:
         "commercial_complete": True,
         "version": API_VERSION,
         "features": {
-            "vercel_dashboard_connected": True,
             "self_serve_api_key_signup": PUBLIC_SIGNUP_ENABLED,
-            "stripe_direct_billing": False,
+            "profile_auth": bool(ROUTER_STATUS.get("profile_routes", {}).get("loaded")),
             "manual_invoice_billing": True,
-            "merchant_of_record_ready": True,
             "certify_pdf_report": True,
             "certify_svg_badge": True,
         },
