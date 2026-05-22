@@ -1,12 +1,28 @@
-import PricingCard, { Plan } from '../components/PricingCard'
+import { Link } from 'react-router-dom'
+import Card from '../components/Card'
 
-const plans: Plan[] = [
-  { id: 'free', name: 'Free Developer', price: '$0/month', features: ['Starter API key', 'Limited monthly scans', 'Basic usage dashboard', 'Android SDK testing'] },
-  { id: 'pro', name: 'Pro', price: 'Paid monthly', features: ['Higher quota', 'Commercial use', 'Dashboard usage', 'Email support'] },
-  { id: 'enterprise', name: 'Enterprise', price: 'Custom quote', features: ['Custom quota', 'SOC workflow', 'Audit/export', 'Tenant policy controls', 'Support/onboarding'] },
-  { id: 'certify', name: 'MAISB Certify', price: 'Assessment', features: ['Assessment request', 'PDF report', 'Badge SVG', 'Benchmark-style result'] },
+const plans = [
+  { id: 'free', name: 'Free', price: '$0', copy: 'Developer access with basic dashboard and API key support.' },
+  { id: 'pro', name: 'Pro', price: 'Request Invoice', copy: 'Expanded quotas and commercial onboarding. Coming soon.' },
+  { id: 'certify', name: 'Certify', price: 'Request Invoice', copy: 'MAISB certification workflow and reporting. Coming soon.' },
 ]
 
 export default function Pricing() {
-  return <main className="public-shell narrow"><h1>Pricing</h1><p>Start free, upgrade when your mobile AI workflow needs production security controls.</p><div className="grid">{plans.map((plan) => <PricingCard key={plan.id} plan={plan} />)}</div><p className="muted">Online checkout is being configured. For Pro, Enterprise, or Certify plans, request an invoice at <a href="mailto:sales@maisb.app">sales@maisb.app</a>. No card payments are currently accepted online.</p></main>
+  return (
+    <main className="public-shell narrow">
+      <h1>Pricing</h1>
+      <p className="muted">Select Free to start now. Pro and Certify are invoice-based during rollout.</p>
+      <section className="grid">
+        {plans.map((plan) => (
+          <Card key={plan.id} title={plan.name} subtitle={plan.price}>
+            <p className="muted">{plan.copy}</p>
+          </Card>
+        ))}
+      </section>
+      <p className="muted">
+        Online checkout is being configured. We do not currently collect card payments directly on this website. For Pro, Enterprise, or MAISB Certify, request an invoice or contact sales.
+      </p>
+      <Link to="/signup">Create account</Link>
+    </main>
+  )
 }

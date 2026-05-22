@@ -1,13 +1,17 @@
 import { FormEvent, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { apiRequest } from '../lib/api'
 import { setStoredEmail } from '../lib/auth'
 
-type SignupResponse = { profile_id: string; email: string; email_sent: boolean; next_step?: string }
+type SignupResponse = {
+  created: boolean
+  email: string
+  email_sent: boolean
+}
 
 export default function Signup() {
-  const [form, setForm] = useState({ name: '', email: '', company: '', use_case: '' })
+  const [form, setForm] = useState({ name: '', email: '', company: '', use_case: '', password: '' })
   const [submitted, setSubmitted] = useState(false)
-  const [emailSent, setEmailSent] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -21,7 +25,6 @@ export default function Signup() {
         body: JSON.stringify(form),
       })
       setStoredEmail(data.email)
-      setEmailSent(data.email_sent)
       setSubmitted(true)
     } catch (err) {
       setError((err as Error).message)
@@ -34,13 +37,9 @@ export default function Signup() {
     return (
       <main className="auth-page">
         <div className="auth-card">
-          <h1>Check your inbox</h1>
-          <p>
-            {emailSent
-              ? `A verification link was sent to ${form.email}. Click it to confirm your account.`
-              : `We received your sign-up for ${form.email}. Check your inbox for a verification link.`}
-          </p>
-          <p className="muted">After verifying, return here to <a href="/login">log in</a>.</p>
+          <h1>Verification email sent</h1>
+          <p className="muted">Check your inbox for the token, then complete verification.</p>
+          <Link to="/verify-email">Verify email</Link>
         </div>
       </main>
     )
@@ -48,41 +47,20 @@ export default function Signup() {
 
   return (
     <main className="auth-page">
-      <section className="auth-card wide">
-        <h1>Create your account</h1>
-        <p className="muted">Enter your details. We'll send a verification link to your email.</p>
-        <form onSubmit={onSubmit} className="form-grid">
-          <input
-            required
-            placeholder="Name"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <input
-            required
-            type="email"
-            placeholder="Work email"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-          />
-          <input
-            placeholder="Company (optional)"
-            value={form.company}
-            onChange={(e) => setForm({ ...form, company: e.target.value })}
-          />
-          <input
-            placeholder="Use case (optional)"
-            value={form.use_case}
-            onChange={(e) => setForm({ ...form, use_case: e.target.value })}
-          />
-          <button type="submit" disabled={loading}>
-            {loading ? 'Sending…' : 'Create account'}
-          </button>
-        </form>
-        <p className="muted">Already have an account? <a href="/login">Log in</a></p>
+      <form className="auth-card wide" onSubmit={onSubmit}>
+        <h1>Create account</h1>
+        <p className="muted">Enterprise workspace onboarding starts with email verification.</p>
+        <div className="form-grid">
+          <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" />
+          <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" />
+          <input required value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="Company" />
+          <input required value={form.use_case} onChange={(e) => setForm({ ...form, use_case: e.target.value })} placeholder="Use case" />
+          <input required type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password (min 8 chars)" minLength={8} />
+        </div>
+        <button type="submit" disabled={loading}>{loading ? 'Creating…' : 'Sign up'}</button>
+        <Link to="/login">Already have an account? Login</Link>
         {error && <p className="error">{error}</p>}
-      </section>
+      </form>
     </main>
   )
 }
-

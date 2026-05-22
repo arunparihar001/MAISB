@@ -2,10 +2,11 @@ import type { ReactElement } from 'react'
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
-import { getApiKey } from './lib/auth'
-import { isAppHost } from './lib/config'
+import { getApiKeyExists, getSelectedPlan, getSessionToken, getStoredProfile } from './lib/auth'
+import Analytics from './pages/Analytics'
 import ApiKeys from './pages/ApiKeys'
 import Billing from './pages/Billing'
+import BoundaryProtection from './pages/BoundaryProtection'
 import Certify from './pages/Certify'
 import Dashboard from './pages/Dashboard'
 import Landing from './pages/Landing'
@@ -13,15 +14,59 @@ import Login from './pages/Login'
 import Pricing from './pages/Pricing'
 import Privacy from './pages/Privacy'
 import Refund from './pages/Refund'
+import Reports from './pages/Reports'
+import Security from './pages/Security'
+import SelectPlan from './pages/SelectPlan'
 import Settings from './pages/Settings'
 import Signup from './pages/Signup'
-import SocConsole from './pages/SocConsole'
+import Team from './pages/Team'
 import Terms from './pages/Terms'
-import Usage from './pages/Usage'
+import Traces from './pages/Traces'
 import VerifyEmail from './pages/VerifyEmail'
 
-function RequireApiKey({ children }: { children: ReactElement }) {
-  if (!getApiKey()) return <Navigate to="/login" replace />
+type Gate = 'ok' | 'login' | 'verify-email' | 'select-plan' | 'api-keys'
+
+function resolveGate(): Gate {
+  const token = getSessionToken()
+  if (!token) return 'login'
+
+  const profile = getStoredProfile()
+  if (!profile?.verified) return 'verify-email'
+
+  const selectedPlan = getSelectedPlan()
+  if (!selectedPlan) return 'select-plan'
+
+  if (selectedPlan === 'free' && !getApiKeyExists()) {
+    return 'api-keys'
+  }
+
+  return 'ok'
+}
+
+function redirectForGate(gate: Gate): string {
+  if (gate === 'login') return '/login'
+  if (gate === 'verify-email') return '/verify-email'
+  if (gate === 'select-plan') return '/select-plan'
+  if (gate === 'api-keys') return '/api-keys'
+  return '/dashboard'
+}
+
+function RequireAuth({ children }: { children: ReactElement }) {
+  const gate = resolveGate()
+  if (gate === 'login') return <Navigate to="/login" replace />
+  return children
+}
+
+function RequireVerified({ children }: { children: ReactElement }) {
+  const gate = resolveGate()
+  if (gate === 'login') return <Navigate to="/login" replace />
+  if (gate === 'verify-email') return <Navigate to="/verify-email" replace />
+  return children
+}
+
+function RequireReady({ children }: { children: ReactElement }) {
+  const gate = resolveGate()
+  if (gate !== 'ok') return <Navigate to={redirectForGate(gate)} replace />
   return children
 }
 
@@ -37,47 +82,50 @@ function AppLayout() {
   )
 }
 
-function HostHome() {
-  if (isAppHost()) return <Navigate to={getApiKey() ? '/dashboard' : '/login'} replace />
-  return <Landing />
+function AuthEntry({ children }: { children: ReactElement }) {
+  const gate = resolveGate()
+  if (gate === 'ok') return <Navigate to="/dashboard" replace />
+  if (gate === 'select-plan') return <Navigate to="/select-plan" replace />
+  if (gate === 'api-keys') return <Navigate to="/api-keys" replace />
+  return children
 }
 
 export default function App() {
   return (
     <Routes>
-      {/* Public */}
-      <Route path="/" element={<HostHome />} />
+      <Route path="/" element={<Landing />} />
       <Route path="/pricing" element={<Pricing />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/refund" element={<Refund />} />
 
-      {/* Auth */}
-      <Route path="/login" element={<Login />} />
-      <Route path="/signup" element={<Signup />} />
+      <Route path="/signup" element={<AuthEntry><Signup /></AuthEntry>} />
       <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/login" element={<AuthEntry><Login /></AuthEntry>} />
 
-      {/* API key generation — accessible before a key exists */}
-      <Route path="/api-keys" element={<ApiKeys />} />
+      <Route path="/select-plan" element={<RequireVerified><SelectPlan /></RequireVerified>} />
+      <Route path="/api-keys" element={<RequireVerified><ApiKeys /></RequireVerified>} />
 
-      {/* Protected — require a stored API key */}
       <Route
         element={
-          <RequireApiKey>
+          <RequireReady>
             <AppLayout />
-          </RequireApiKey>
+          </RequireReady>
         }
       >
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/usage" element={<Usage />} />
+        <Route path="/analytics" element={<Analytics />} />
+        <Route path="/boundary-protection" element={<BoundaryProtection />} />
+        <Route path="/traces" element={<Traces />} />
+        <Route path="/security" element={<Security />} />
+        <Route path="/team" element={<Team />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/billing" element={<Billing />} />
         <Route path="/certify" element={<Certify />} />
-        <Route path="/soc" element={<SocConsole />} />
-        <Route path="/settings" element={<Settings />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }
-
