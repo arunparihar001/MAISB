@@ -1,17 +1,63 @@
-import { useEffect, useState } from 'react'
-import MetricCard from '../components/MetricCard'
-import UsageChart from '../components/UsageChart'
+import { useEffect, useMemo, useState } from 'react'
+import Card from '../components/Card'
+import StatCard from '../components/StatCard'
 import { apiRequest } from '../lib/api'
-import { getApiKey } from '../lib/auth'
 
-type DashboardData = { customer?: { email?: string; plan?: string; api_key_masked?: string }; usage?: { scan_count?: number; limit?: number; remaining?: number } }
+type DecisionResponse = { decisions: Record<string, number> }
+type ReputationResponse = { channels: Array<{ channel: string; events: number; blocked: number; trust_score: number }> }
+type KeysResponse = { api_keys: Array<{ key_id: string; status: string }> }
 
 export default function Dashboard() {
-  const [data, setData] = useState<DashboardData | null>(null)
+  const [decisions, setDecisions] = useState<Record<string, number>>({ ALLOWED: 0, REVIEW: 0, BLOCKED: 0 })
+  const [avgRisk, setAvgRisk] = useState(0)
+  const [activeKeys, setActiveKeys] = useState(0)
   const [error, setError] = useState('')
-  useEffect(() => { const key = getApiKey(); if (!key) return; apiRequest<DashboardData>('/v1/public/dashboard').then(setData).catch((e) => setError((e as Error).message)) }, [])
-  if (error) return <div className="stack"><p className="error">{error}</p></div>
-  if (!data) return <div className="stack"><p>Loading dashboard...</p></div>
-  const usage = data.usage || {}
-  return <div className="stack"><h2>Customer overview</h2><div className="grid"><MetricCard title="Plan" value={data.customer?.plan || 'free'} /><MetricCard title="Scans" value={usage.scan_count || 0} /><MetricCard title="Remaining" value={usage.remaining ?? Math.max(0, (usage.limit || 1000) - (usage.scan_count || 0))} /></div><UsageChart used={usage.scan_count || 0} limit={usage.limit || 1000} /><div className="card"><h3>Quick links</h3><p><a href="https://api.maisb.app/docs" target="_blank">API Docs</a> · <a href="/certify">Start Certify</a> · <a href="/billing">Upgrade plan</a></p></div></div>
+
+  useEffect(() => {
+    Promise.all([
+      apiRequest<DecisionResponse>('/v1/dashboard/analytics/decision-breakdown'),
+      apiRequest<ReputationResponse>('/v1/dashboard/security/channel-reputation'),
+      apiRequest<KeysResponse>('/v1/api-keys'),
+    ])
+      .then(([decisionData, channelData, keyData]) => {
+        setDecisions(decisionData.decisions || { ALLOWED: 0, REVIEW: 0, BLOCKED: 0 })
+        const channels = channelData.channels || []
+        if (channels.length) {
+          const derived = channels.reduce((sum, item) => sum + (1 - (item.trust_score || 0)), 0) / channels.length
+          setAvgRisk(Number(derived.toFixed(2)))
+        }
+        setActiveKeys((keyData.api_keys || []).filter((item) => item.status !== 'revoked').length)
+      })
+      .catch((err) => setError((err as Error).message))
+  }, [])
+
+  const total = useMemo(
+    () => Object.values(decisions).reduce((sum, value) => sum + value, 0),
+    [decisions],
+  )
+
+  return (
+    <main className="stack">
+      <h1>Overview</h1>
+      <section className="grid">
+        <StatCard label="Total Scans" value={total} />
+        <StatCard label="Blocked" value={decisions.BLOCKED || 0} />
+        <StatCard label="Reviewed" value={decisions.REVIEW || 0} />
+        <StatCard label="Allowed" value={decisions.ALLOWED || 0} />
+        <StatCard label="Avg Risk Score" value={avgRisk.toFixed(2)} />
+        <StatCard label="Active API Keys" value={activeKeys} />
+      </section>
+
+      <section className="grid">
+        <Card title="Boundary Protection Active" subtitle="Runtime channel boundary controls are enabled.">
+          <p className="muted">Clipboard, deep links, notifications, QR, NFC, share intents, and webviews are evaluated with policy-aware scoring.</p>
+        </Card>
+        <Card title="Cross-Channel Trace Engine" subtitle="Trace context before the LLM acts.">
+          <p className="muted">MAISB protects mobile AI agents before untrusted channel content reaches the LLM.</p>
+        </Card>
+      </section>
+
+      {error && <p className="error">{error}</p>}
+    </main>
+  )
 }
