@@ -12,8 +12,9 @@ import re
 import secrets
 import sqlite3
 import sys
-from pathlib import Path
+from email.utils import parseaddr
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -335,19 +336,20 @@ def _resend_from_address() -> str:
     value = (RESEND_FROM or "").strip()
     if not value:
         return ""
-    match = re.search(r"<\s*([^<>@\s]+@[^<>]+)\s*>", value)
-    if match:
-        return match.group(1).strip()
+    parsed = parseaddr(value)[1].strip()
+    if is_valid_email(parsed):
+        return parsed
+    if is_valid_email(value):
+        return value
     return value
 
 
 def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
-    """Return a copy of the most recent request-scoped Resend diagnostics."""
+    """Return the most recent request-scoped Resend diagnostics."""
     diagnostics = _LAST_RESEND_DIAGNOSTICS.get()
     if diagnostics is None:
         return None
-    # Return a copy so callers cannot mutate the request-scoped diagnostics in place.
-    return dict(diagnostics)
+    return diagnostics
 
 
 def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
@@ -361,6 +363,7 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
     """Extract Resend error details while tolerating malformed responses."""
     try:
         diagnostics: Dict[str, Any] = {"provider": "resend", "status_code": response.status_code}
+        # Prefer the documented Resend request ID header, but keep compatibility with older variants.
         request_id = response.headers.get("x-request-id") or response.headers.get("x-resend-request-id")
         if request_id:
             diagnostics["request_id"] = request_id
@@ -416,7 +419,7 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
                 "Accept": "application/json",
                 "User-Agent": "MAISB/1.0",
             },
-            timeout=httpx.Timeout(8.0, connect=5.0),
+            timeout=httpx.Timeout(connect=5.0, read=8.0, write=8.0, pool=8.0),
         )
         response.raise_for_status()
         return True

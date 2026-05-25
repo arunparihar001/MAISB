@@ -176,13 +176,14 @@ def test_send_resend_email_records_provider_error_diagnostics(monkeypatch, tmp_p
     from api import profile_routes
 
     request = httpx.Request("POST", "https://api.resend.com/emails")
+    provider_error = {
+        "error": "forbidden",
+        "message": "Sender domain is not verified for this workspace.",
+    }
     response = httpx.Response(
         403,
         request=request,
-        json={
-            "error": "forbidden",
-            "message": "Sender domain is not verified for this workspace.",
-        },
+        json=provider_error,
     )
 
     def fake_post(*args, **kwargs):
@@ -196,10 +197,7 @@ def test_send_resend_email_records_provider_error_diagnostics(monkeypatch, tmp_p
     assert profile_routes.get_last_resend_diagnostics() == {
         "provider": "resend",
         "status_code": 403,
-        "provider_error": {
-            "error": "forbidden",
-            "message": "Sender domain is not verified for this workspace.",
-        },
+        "provider_error": provider_error,
         "error": "forbidden",
         "message": "Sender domain is not verified for this workspace.",
     }
@@ -364,6 +362,10 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
             "RESEND_FROM_EMAIL": "MAISB <hello@updates.maisb.app>",
         },
     )
+    provider_error = {
+        "error": "forbidden",
+        "message": "Sender domain is not verified for this workspace.",
+    }
     signup_route = next(route for route in scan_api.app.routes if getattr(route, "path", None) == "/v1/profile/signup")
     monkeypatch.setitem(signup_route.endpoint.__globals__, "resend_enabled", lambda: True)
     monkeypatch.setitem(signup_route.endpoint.__globals__, "send_resend_email", lambda *args, **kwargs: False)
@@ -374,10 +376,7 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
             "provider": "resend",
             "status_code": 403,
             "error": "forbidden",
-            "provider_error": {
-                "error": "forbidden",
-                "message": "Sender domain is not verified for this workspace.",
-            },
+            "provider_error": provider_error,
             "message": "Sender domain is not verified for this workspace.",
         },
     )
@@ -400,9 +399,6 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
         "provider": "resend",
         "status_code": 403,
         "error": "forbidden",
-        "provider_error": {
-            "error": "forbidden",
-            "message": "Sender domain is not verified for this workspace.",
-        },
+        "provider_error": provider_error,
         "message": "Sender domain is not verified for this workspace.",
     }
