@@ -52,6 +52,10 @@ LOGGER = logging.getLogger(__name__)
 PASSWORD_CTX = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_DIAGNOSTIC_MESSAGE_LENGTH = 200
+RESEND_CONNECT_TIMEOUT = 5.0
+RESEND_READ_TIMEOUT = 8.0
+RESEND_WRITE_TIMEOUT = 8.0
+RESEND_POOL_TIMEOUT = 8.0
 _LAST_RESEND_DIAGNOSTICS: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     "last_resend_diagnostics",
     default=None,
@@ -341,7 +345,8 @@ def _resend_from_address() -> str:
         return parsed
     if is_valid_email(value):
         return value
-    return value
+    LOGGER.warning("Invalid Resend sender configured: %s", value)
+    return ""
 
 
 def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
@@ -363,7 +368,7 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
     """Extract Resend error details while tolerating malformed responses."""
     try:
         diagnostics: Dict[str, Any] = {"provider": "resend", "status_code": response.status_code}
-        # Prefer the documented Resend request ID header, but keep compatibility with older variants.
+        # `x-request-id` is the current Resend request ID header; `x-resend-request-id` is a legacy variant.
         request_id = response.headers.get("x-request-id") or response.headers.get("x-resend-request-id")
         if request_id:
             diagnostics["request_id"] = request_id
@@ -419,7 +424,12 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
                 "Accept": "application/json",
                 "User-Agent": "MAISB/1.0",
             },
-            timeout=httpx.Timeout(connect=5.0, read=8.0, write=8.0, pool=8.0),
+            timeout=httpx.Timeout(
+                connect=RESEND_CONNECT_TIMEOUT,
+                read=RESEND_READ_TIMEOUT,
+                write=RESEND_WRITE_TIMEOUT,
+                pool=RESEND_POOL_TIMEOUT,
+            ),
         )
         response.raise_for_status()
         return True
