@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 import sys
 from pathlib import Path
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -49,7 +50,10 @@ TOKEN_EXPIRY_HOURS = 24
 LOGGER = logging.getLogger(__name__)
 PASSWORD_CTX = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_LAST_RESEND_DIAGNOSTICS: Optional[Dict[str, Any]] = None
+_LAST_RESEND_DIAGNOSTICS: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "last_resend_diagnostics",
+    default=None,
+)
 
 router = APIRouter(tags=["SaaS"])
 
@@ -326,14 +330,14 @@ def resend_enabled() -> bool:
 
 
 def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
-    if _LAST_RESEND_DIAGNOSTICS is None:
+    diagnostics = _LAST_RESEND_DIAGNOSTICS.get()
+    if diagnostics is None:
         return None
-    return dict(_LAST_RESEND_DIAGNOSTICS)
+    return dict(diagnostics)
 
 
 def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
-    global _LAST_RESEND_DIAGNOSTICS
-    _LAST_RESEND_DIAGNOSTICS = dict(diagnostics) if diagnostics else None
+    _LAST_RESEND_DIAGNOSTICS.set(dict(diagnostics) if diagnostics else None)
 
 
 def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str, Any]:

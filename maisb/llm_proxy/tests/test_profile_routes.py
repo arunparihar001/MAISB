@@ -305,8 +305,8 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
     monkeypatch.setitem(signup_route.endpoint.__globals__, "send_resend_email", lambda *args, **kwargs: False)
     monkeypatch.setitem(
         signup_route.endpoint.__globals__,
-        "_LAST_RESEND_DIAGNOSTICS",
-        {
+        "get_last_resend_diagnostics",
+        lambda: {
             "provider": "resend",
             "status_code": 403,
             "error": "forbidden",
