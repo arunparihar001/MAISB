@@ -188,6 +188,8 @@ def init_profile_db() -> None:
         """
     )
 
+    # Keep legacy scan API columns alongside the newer profile-aware fields so
+    # old Railway DBs and /v1/scan compatibility remain intact during deploys.
     for col, ddl in {
         "key": "key TEXT",
         "plan": "plan TEXT DEFAULT 'free'",
@@ -370,14 +372,16 @@ def safe_log_activity(profile_id: str, action: str, metadata: Optional[Dict[str,
 def hash_password(password: str) -> str:
     try:
         return PASSWORD_CTX.hash(password)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("bcrypt hashing failed, falling back to pbkdf2_sha256: %s", exc)
         return PASSWORD_CTX.hash(password, scheme="pbkdf2_sha256")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
         return PASSWORD_CTX.verify(password, password_hash)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("Password verification encountered an unexpected error; returning False: %s", exc)
         return False
 
 
@@ -537,19 +541,20 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
             )
 
         profile_id = str(existing["id"]) if existing and existing["id"] else f"prof_{secrets.token_hex(8)}"
-        password_hash = hash_password(body.password)
+        new_password_hash = hash_password(body.password)
+        stored_password_hash = new_password_hash
 
         if existing is None:
             try:
                 if "profile_id" in cols:
                     conn.execute(
                         "INSERT INTO profiles (id, profile_id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
-                        (profile_id, profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+                        (profile_id, profile_id, body.name.strip(), email, body.company, body.use_case, stored_password_hash, now, now),
                     )
                 else:
                     conn.execute(
                         "INSERT INTO profiles (id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
-                        (profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+                        (profile_id, body.name.strip(), email, body.company, body.use_case, stored_password_hash, now, now),
                     )
                 created = True
             except sqlite3.IntegrityError:
@@ -562,26 +567,25 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
                     )
                 if existing and existing["id"]:
                     profile_id = str(existing["id"])
-
-        update_result = conn.execute(
-            "UPDATE profiles SET name=?, company=?, use_case=?, password_hash=?, verified=0, updated_at=? WHERE lower(email)=lower(?) AND COALESCE(verified, 0)=0",
-            (body.name.strip(), body.company, body.use_case, password_hash, now, email),
-        )
-        if update_result.rowcount == 0:
-            current = conn.execute("SELECT verified FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
-            if current and current["verified"]:
-                raise HTTPException(
-                    status_code=409,
-                    detail="An account with this email already exists. Please log in.",
-                )
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "signup_failed",
-                    "message": "Unable to create or update the signup record.",
-                    "email": email,
-                },
+        else:
+            update_result = conn.execute(
+                "UPDATE profiles SET name=?, company=?, use_case=?, password_hash=?, updated_at=? WHERE lower(email)=lower(?) AND COALESCE(verified, 0)=0",
+                (body.name.strip(), body.company, body.use_case, new_password_hash, now, email),
             )
+            if update_result.rowcount == 0:
+                current = conn.execute("SELECT verified FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+                if current and current["verified"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="An account with this email already exists. Please log in.",
+                    )
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "signup_failed",
+                        "message": "Unable to create or update the signup record.",
+                    },
+                )
 
         raw_token = secrets.token_urlsafe(32)
         token_hash = sha256(raw_token)
@@ -597,24 +601,22 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
         raise
     except sqlite3.IntegrityError as exc:
         conn.rollback()
-        LOGGER.warning("Signup integrity error for %s: %s", email, exc)
+        LOGGER.warning("Signup failed due to database integrity constraint violation: %s", exc)
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "signup_conflict",
                 "message": "Unable to complete signup because this email is already in use.",
-                "email": email,
             },
         )
     except Exception as exc:
         conn.rollback()
-        LOGGER.exception("Signup failed for %s", email)
+        LOGGER.exception("Signup failed")
         raise HTTPException(
             status_code=500,
             detail={
                 "error": "signup_failed",
                 "message": "Signup could not be completed.",
-                "email": email,
             },
         ) from exc
     finally:

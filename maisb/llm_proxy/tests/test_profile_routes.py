@@ -125,9 +125,15 @@ def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path)
     assert first.status_code == 200
     assert first.json()["created"] is True
 
+    with closing(profile_routes.get_conn()) as conn:
+        initial_hash = conn.execute(
+            "SELECT password_hash FROM profiles WHERE email=?",
+            (payload["email"],),
+        ).fetchone()["password_hash"]
+
     second = client.post(
         "/v1/profile/signup",
-        json={**payload, "name": "Grace M. Hopper", "use_case": "Resend signup"},
+        json={**payload, "name": "Grace M. Hopper", "use_case": "Resend signup", "password": "new-pass-123"},
     )
     assert second.status_code == 200
     data = second.json()
@@ -136,6 +142,25 @@ def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path)
     assert data["email_sent"] is True
     assert data["message"] == "Verification email resent."
     assert len(sent_messages) == 2
+
+    with closing(profile_routes.get_conn()) as conn:
+        current_hash = conn.execute(
+            "SELECT password_hash FROM profiles WHERE email=?",
+            (payload["email"],),
+        ).fetchone()["password_hash"]
+
+    assert current_hash != initial_hash
+    token_match = re.search(r"<pre>([^<]+)</pre>", sent_messages[-1][2])
+    assert token_match is not None
+    verify = client.post("/v1/profile/verify-email", json={"token": token_match.group(1)})
+    assert verify.status_code == 200
+
+    login = client.post(
+        "/v1/profile/login",
+        json={"email": payload["email"], "password": "new-pass-123"},
+    )
+    assert login.status_code == 200
+    assert login.json()["profile"]["email"] == payload["email"]
 
 
 def test_duplicate_verified_signup_returns_conflict(monkeypatch, tmp_path):
@@ -181,6 +206,7 @@ def test_duplicate_verified_signup_returns_conflict(monkeypatch, tmp_path):
     )
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"] == "An account with this email already exists. Please log in."
+    assert len(sent_messages) == 1
 
 
 def test_cors_preflight_allows_production_signup_origin(monkeypatch, tmp_path):
@@ -242,7 +268,7 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
         "/v1/profile/signup",
         json={
             "name": "Grace Hopper",
-            "email": "grace@example.com",
+            "email": "grace-failure@example.com",
             "company": "US Navy",
             "use_case": "Verify error handling",
             "password": "s3cret-pass",
