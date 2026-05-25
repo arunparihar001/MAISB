@@ -1,5 +1,8 @@
 import { FormEvent, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import Badge from '../components/Badge'
+import Button from '../components/Button'
+import Card from '../components/Card'
 import { apiRequest } from '../lib/api'
 import { clearSelectedPlan, setApiKeyExists, setSessionToken, setStoredEmail, setStoredProfile } from '../lib/auth'
 
@@ -46,17 +49,90 @@ export default function Login() {
   }
 
   return (
-    <main className="auth-page">
-      <form className="auth-card glass-card" onSubmit={onSubmit}>
-        <p className="eyebrow">Authenticated access</p>
-        <h1>Login</h1>
-        <p className="muted">Use verified credentials to re-enter the workspace.</p>
-        <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
-        <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" />
-        <button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Enter workspace'}</button>
-        <Link to="/signup">Need an account? Sign up</Link>
-        {error && <p className="error">{error}</p>}
-      </form>
+    <main className="onboarding-page">
+      <div className="grid two-col" style={{ alignItems: 'start', gap: '2rem' }}>
+        <form className="glass-card" style={{ padding: '2rem' }} onSubmit={onSubmit}>
+          <p className="eyebrow">Authenticated access</p>
+          <h1>Welcome back</h1>
+          <p className="muted" style={{ marginBottom: '1.5rem' }}>
+            Enter your verified credentials to re-enter your workspace.
+          </p>
+
+          <div className="form-grid" style={{ marginBottom: '1.5rem' }}>
+            <div>
+              <label style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.35rem', display: 'block' }}>
+                Email address
+              </label>
+              <input
+                required
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.35rem', display: 'block' }}>
+                Password
+              </label>
+              <input
+                required
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </div>
+          </div>
+
+          <Button type="submit" disabled={loading} style={{ width: '100%', marginBottom: '1rem' }}>
+            {loading ? 'Signing in…' : 'Enter workspace'}
+          </Button>
+
+          <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+            <Link to="/signup" style={{ fontSize: '0.9rem' }}>Need an account? Sign up →</Link>
+          </div>
+
+          {error && <p className="error">{error}</p>}
+        </form>
+
+        <div style={{ display: 'grid', gap: '1.5rem' }}>
+          <Card title="Workspace security" subtitle="What protects your account">
+            <ul className="bullet-list" style={{ margin: 0 }}>
+              <li>Email-based verification</li>
+              <li>Role-based access control</li>
+              <li>Audit logs of all activity</li>
+              <li>Secure session management</li>
+              <li>Metadata-only data storage</li>
+            </ul>
+          </Card>
+
+          <Card title="Your workspace includes" subtitle="What you get after login">
+            <ul className="bullet-list" style={{ margin: 0 }}>
+              <li>Boundary protection dashboard</li>
+              <li>Security event timeline</li>
+              <li>API key management</li>
+              <li>Team collaboration tools</li>
+              <li>Compliance-ready exports</li>
+            </ul>
+          </Card>
+
+          <Card title="Trouble signing in?" subtitle="We can help">
+            <p className="muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>
+              Email verification is required for all workspaces. Check your email for verification status.
+            </p>
+            <a href="mailto:support@maisb.app">
+              <Button variant="secondary">Contact support</Button>
+            </a>
+          </Card>
+
+          <div style={{ textAlign: 'center' }}>
+            <Badge>
+              🔒 All data is encrypted in transit and at rest
+            </Badge>
+          </div>
+        </div>
+      </div>
     </main>
   )
 }

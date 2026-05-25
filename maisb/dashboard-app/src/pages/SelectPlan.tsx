@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import Badge from '../components/Badge'
+import Button from '../components/Button'
 import Card from '../components/Card'
 import PlanCard from '../components/PlanCard'
 import { apiRequest } from '../lib/api'
@@ -55,32 +57,76 @@ export default function SelectPlan() {
 
   return (
     <main className="onboarding-page">
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">Plan selection</p>
-          <h1>Select your plan</h1>
-          <p className="muted">Free is active today. Pro, Enterprise, and Certify are invoice-based during rollout.</p>
-        </div>
+      <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+        <p className="eyebrow">Step 2 of 3</p>
+        <h1>Select your plan</h1>
+        <p className="muted" style={{ maxWidth: '60ch', margin: '1rem auto' }}>
+          Start with Free and upgrade anytime. Pro, Certify, and Enterprise plans are invoice-based during our rollout.
+        </p>
       </div>
-      <section className="grid">
+
+      <section className="grid two-col" style={{ marginBottom: '2rem' }}>
         {plans.map((plan) => (
           <PlanCard
             key={plan.code}
             name={plan.name}
             code={plan.code}
-            price={plan.code === 'free' ? '$0' : 'Request Invoice'}
-            features={plan.code === 'free' ? ['Start immediately', 'API key generation', 'Core dashboard access'] : ['Coming soon access', 'Request invoice workflow']}
+            price={plan.code === 'free' ? '$0/month' : 'Custom pricing'}
+            features={
+              plan.code === 'free'
+                ? ['Boundary scanning', 'API key generation', 'Core dashboard', 'Security events', 'Team invitations']
+                : plan.code === 'pro'
+                  ? ['Everything in Free', 'Advanced analytics', 'Team collaboration', 'Compliance reports', 'Priority support']
+                  : ['Everything in Pro', 'Runtime assessment', 'Certify badge', 'Enterprise workflows', 'Dedicated support']
+            }
             comingSoon={plan.coming_soon}
             onSelect={() => selectPlan(plan)}
-            actionLabel={loadingCode === plan.code ? 'Working…' : plan.code === 'free' ? 'Start Free' : 'Coming Soon / Request Invoice'}
+            actionLabel={
+              loadingCode === plan.code ? 'Working…' : plan.code === 'free' ? 'Start Free' : 'Request Invoice'
+            }
           />
         ))}
       </section>
-      <Card title="Commercial posture">
-        <p className="muted">Online checkout is being configured. We do not currently collect card payments directly on this website. For Pro, Enterprise, or MAISB Certify, request an invoice or contact sales.</p>
+
+      <section className="grid two-col" style={{ marginBottom: '2rem' }}>
+        <Card title="Free plan includes" subtitle="Start scanning immediately">
+          <ul className="bullet-list" style={{ margin: 0 }}>
+            <li>Unlimited boundary scans via /v1/scan</li>
+            <li>Dashboard with sample data</li>
+            <li>API key generation and rotation</li>
+            <li>Security event logging (30 days)</li>
+            <li>Single team member</li>
+            <li>Development-grade rate limits</li>
+          </ul>
+        </Card>
+
+        <Card title="When to upgrade" subtitle="Pro and Enterprise planning">
+          <ul className="bullet-list" style={{ margin: 0 }}>
+            <li>Moving to production (Pro)</li>
+            <li>Adding team members (Pro)</li>
+            <li>Longer retention needed (Pro+)</li>
+            <li>Enterprise governance (Enterprise)</li>
+            <li>Runtime certification (Certify)</li>
+            <li>Custom integrations (Enterprise)</li>
+          </ul>
+        </Card>
+      </section>
+
+      <Card title="Commercial posture" subtitle="How we bill">
+        <p className="muted" style={{ marginBottom: '1rem' }}>
+          Free tier is available immediately and lasts as long as you need to evaluate MAISB. Pro, Certify, and Enterprise plans are invoice-based. We do not currently collect card payments directly on this website.
+        </p>
+        <p className="muted">
+          <strong>Ready for production?</strong> Contact <a href="mailto:sales@maisb.app">sales@maisb.app</a> to discuss Pro or Enterprise pricing.
+        </p>
       </Card>
+
       {message && <p className="notice">{message}</p>}
       {error && <p className="error">{error}</p>}
+
+      <div style={{ textAlign: 'center', marginTop: '3rem', paddingTop: '2rem', borderTop: '1px solid rgba(148, 163, 184, 0.12)' }}>
+        <Badge>You're almost done! Generate your API key in the next step.</Badge>
+      </div>
     </main>
   )
 }
