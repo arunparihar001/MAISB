@@ -11,13 +11,15 @@ type TeamResponse = { team: TeamMember[]; enterprise_actions?: { coming_soon?: b
 
 type Invite = { invited: boolean; email: string; role: string; invite_id: string; status: string; message: string }
 
+type ActivityItem = { id: string; entry: string; timestamp?: string }
+
 export default function Team() {
   const [team, setTeam] = useState<TeamMember[]>([])
   const [comingSoon, setComingSoon] = useState(false)
   const [tab, setTab] = useState<'members' | 'roles' | 'activity'>('members')
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('analyst')
-  const [activity, setActivity] = useState<Array<{ id: string; entry: string }>>([])
+  const [activity, setActivity] = useState<ActivityItem[]>([])
   const [message, setMessage] = useState('')
 
   useEffect(() => {
@@ -40,7 +42,14 @@ export default function Team() {
         method: 'POST',
         body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
       })
-      setActivity((items) => [{ id: data.invite_id, entry: `Invited ${data.email} as ${data.role} (${data.status})` }, ...items])
+      setActivity((items) => [
+        {
+          id: data.invite_id,
+          entry: `Invited ${data.email} as ${data.role} (${data.status})`,
+          timestamp: new Date().toISOString(),
+        },
+        ...items,
+      ])
       setMessage(data.message)
       setInviteEmail('')
     } catch (err) {
@@ -206,7 +215,11 @@ export default function Team() {
                       }}
                     >
                       <span className="muted">{item.entry}</span>
-                      <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{new Date().toLocaleDateString()}</span>
+                      <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+                        {item.timestamp
+                          ? new Date(item.timestamp).toLocaleDateString()
+                          : 'Today'}
+                      </span>
                     </div>
                   ))}
                 </div>
