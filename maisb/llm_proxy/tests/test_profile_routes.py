@@ -126,7 +126,9 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
     monkeypatch.setattr(profile_routes, "RESEND_FROM", "MAISB <hello@updates.maisb.app>")
     monkeypatch.setattr(profile_routes, "RESEND_REPLY_TO", "sales@maisb.app")
 
-    assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is True
+    sent, diagnostics = profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>")
+    assert sent is True
+    assert diagnostics is None
     assert captured["url"] == "https://api.resend.com/emails"
     assert captured["headers"] == {
         "Authorization": "Bearer test-key",
@@ -167,7 +169,9 @@ def test_send_resend_email_uses_bare_sender_when_already_canonical(monkeypatch, 
     monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
     monkeypatch.setattr(profile_routes, "RESEND_FROM", "hello@updates.maisb.app")
 
-    assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is True
+    sent, diagnostics = profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>")
+    assert sent is True
+    assert diagnostics is None
     assert captured["json"]["from"] == "hello@updates.maisb.app"
 
 
@@ -193,8 +197,9 @@ def test_send_resend_email_records_provider_error_diagnostics(monkeypatch, tmp_p
     monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
     monkeypatch.setattr(profile_routes, "RESEND_FROM", "hello@updates.maisb.app")
 
-    assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is False
-    assert profile_routes.get_last_resend_diagnostics() == {
+    sent, diagnostics = profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>")
+    assert sent is False
+    assert diagnostics == {
         "provider": "resend",
         "status_code": 403,
         "provider_error": provider_error,
@@ -368,17 +373,19 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
     }
     signup_route = next(route for route in scan_api.app.routes if getattr(route, "path", None) == "/v1/profile/signup")
     monkeypatch.setitem(signup_route.endpoint.__globals__, "resend_enabled", lambda: True)
-    monkeypatch.setitem(signup_route.endpoint.__globals__, "send_resend_email", lambda *args, **kwargs: False)
     monkeypatch.setitem(
         signup_route.endpoint.__globals__,
-        "get_last_resend_diagnostics",
-        lambda: {
-            "provider": "resend",
-            "status_code": 403,
-            "error": "forbidden",
-            "provider_error": provider_error,
-            "message": "Sender domain is not verified for this workspace.",
-        },
+        "send_verification_email",
+        lambda *args, **kwargs: (
+            False,
+            {
+                "provider": "resend",
+                "status_code": 403,
+                "error": "forbidden",
+                "provider_error": provider_error,
+                "message": "Sender domain is not verified for this workspace.",
+            },
+        ),
     )
 
     client = TestClient(scan_api.app)

@@ -13,7 +13,6 @@ import secrets
 import sqlite3
 import sys
 from email.utils import parseaddr
-from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -56,10 +55,6 @@ RESEND_CONNECT_TIMEOUT = 5.0
 RESEND_READ_TIMEOUT = 8.0
 RESEND_WRITE_TIMEOUT = 8.0
 RESEND_POOL_TIMEOUT = 8.0
-_LAST_RESEND_DIAGNOSTICS: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
-    "last_resend_diagnostics",
-    default=None,
-)
 
 router = APIRouter(tags=["SaaS"])
 
@@ -349,21 +344,6 @@ def _resend_from_address() -> str:
     return ""
 
 
-def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
-    """Return the most recent request-scoped Resend diagnostics."""
-    diagnostics = _LAST_RESEND_DIAGNOSTICS.get()
-    if diagnostics is None:
-        return None
-    return diagnostics
-
-
-def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
-    if diagnostics is None:
-        _LAST_RESEND_DIAGNOSTICS.set(None)
-    else:
-        _LAST_RESEND_DIAGNOSTICS.set(dict(diagnostics))
-
-
 def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str, Any]:
     """Extract Resend error details while tolerating malformed responses."""
     try:
@@ -400,11 +380,9 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
         }
 
 
-def send_resend_email(to: str, subject: str, html_body: str) -> bool:
-    # Reset request-scoped diagnostics before each send attempt.
-    _set_last_resend_diagnostics(None)
+def send_resend_email(to: str, subject: str, html_body: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
     if not resend_enabled() or not to:
-        return False
+        return False, None
     from_address = _resend_from_address()
     payload: Dict[str, Any] = {
         "from": from_address,
@@ -432,24 +410,22 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
             ),
         )
         response.raise_for_status()
-        return True
+        return True, None
     except httpx.HTTPStatusError as exc:
         diagnostics = _safe_resend_diagnostics_from_response(exc.response)
-        _set_last_resend_diagnostics(diagnostics)
         LOGGER.warning("Resend delivery failed: %s", diagnostics)
-        return False
+        return False, diagnostics
     except httpx.RequestError as exc:
         diagnostics = {
             "provider": "resend",
             "error": "request_error",
             "message": str(exc)[:MAX_DIAGNOSTIC_MESSAGE_LENGTH],
         }
-        _set_last_resend_diagnostics(diagnostics)
         LOGGER.warning("Resend delivery failed: %s", diagnostics)
-        return False
+        return False, diagnostics
 
 
-def send_verification_email(email: str, raw_token: str) -> bool:
+def send_verification_email(email: str, raw_token: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
     verify_url = f"{APP_DASHBOARD_URL.rstrip('/')}/verify-email"
     body = (
         "<p>Thanks for signing up for MAISB.</p>"
@@ -459,7 +435,10 @@ def send_verification_email(email: str, raw_token: str) -> bool:
         "<p>This token expires in 24 hours and can only be used once.</p>"
         f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"
     )
-    return send_resend_email(email, "Verify your MAISB account", body)
+    result = send_resend_email(email, "Verify your MAISB account", body)
+    if isinstance(result, tuple):
+        return result
+    return result, None
 
 
 def safe_log_activity(profile_id: str, action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
@@ -722,9 +701,9 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
     finally:
         conn.close()
 
-    email_sent = send_verification_email(email, raw_token)
+    email_sent, diagnostics = send_verification_email(email, raw_token)
     if resend_enabled() and not email_sent:
-        diagnostics = get_last_resend_diagnostics() or {"provider": "resend", "error": "failed"}
+        diagnostics = diagnostics or {"provider": "resend", "error": "failed"}
         safe_log_activity(
             profile_id,
             "profile_signup_email_failed",
