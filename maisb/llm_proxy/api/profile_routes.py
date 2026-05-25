@@ -334,6 +334,7 @@ def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
     diagnostics = _LAST_RESEND_DIAGNOSTICS.get()
     if diagnostics is None:
         return None
+    # Return a copy so callers cannot mutate the request-scoped diagnostics in place.
     return dict(diagnostics)
 
 
@@ -403,7 +404,11 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
         LOGGER.warning("Resend delivery failed: %s", diagnostics)
         return False
     except httpx.RequestError as exc:
-        diagnostics = {"provider": "resend", "error": "request_error", "message": str(exc)[:200]}
+        diagnostics = {
+            "provider": "resend",
+            "error": "request_error",
+            "message": str(exc)[:MAX_DIAGNOSTIC_MESSAGE_LENGTH],
+        }
         _set_last_resend_diagnostics(diagnostics)
         LOGGER.warning("Resend delivery failed: %s", diagnostics)
         return False
