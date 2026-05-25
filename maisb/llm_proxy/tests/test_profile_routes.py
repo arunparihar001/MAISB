@@ -2,6 +2,7 @@ import re
 import sys
 from contextlib import closing
 
+import httpx
 from fastapi.testclient import TestClient
 
 MODULES_TO_CLEAR = ("api.scan_api", "api.profile_routes", "api.public_routes")
@@ -98,6 +99,45 @@ def test_signup_and_email_verification_flow(monkeypatch, tmp_path):
     assert profile_row["verified"] == 1
     assert token_row["token_hash"] != raw_token
     assert len(token_row["token_hash"]) == 64
+
+
+def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
+    setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, *, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "MAISB <hello@updates.maisb.app>")
+    monkeypatch.setattr(profile_routes, "RESEND_REPLY_TO", "sales@maisb.app")
+
+    assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is True
+    assert captured["url"] == "https://api.resend.com/emails"
+    assert captured["headers"] == {"Authorization": "Bearer test-key"}
+    assert captured["json"] == {
+        "from": "MAISB <hello@updates.maisb.app>",
+        "to": ["ada@example.com"],
+        "subject": "Verify",
+        "html": "<p>Body</p>",
+        "reply_to": "sales@maisb.app",
+    }
+    assert isinstance(captured["timeout"], httpx.Timeout)
+    assert captured["timeout"].connect == 5.0
 
 
 def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path):
@@ -262,6 +302,16 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
     signup_route = next(route for route in scan_api.app.routes if getattr(route, "path", None) == "/v1/profile/signup")
     monkeypatch.setitem(signup_route.endpoint.__globals__, "resend_enabled", lambda: True)
     monkeypatch.setitem(signup_route.endpoint.__globals__, "send_resend_email", lambda *args, **kwargs: False)
+    monkeypatch.setitem(
+        signup_route.endpoint.__globals__,
+        "_LAST_RESEND_DIAGNOSTICS",
+        {
+            "provider": "resend",
+            "status_code": 403,
+            "error": "forbidden",
+            "message": "Forbidden",
+        },
+    )
 
     client = TestClient(scan_api.app)
     response = client.post(
@@ -277,3 +327,9 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
 
     assert response.status_code == 502
     assert response.json()["detail"]["error"] == "verification_email_failed"
+    assert response.json()["detail"]["diagnostics"] == {
+        "provider": "resend",
+        "status_code": 403,
+        "error": "forbidden",
+        "message": "Forbidden",
+    }

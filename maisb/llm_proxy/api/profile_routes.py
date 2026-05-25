@@ -12,10 +12,10 @@ import re
 import secrets
 import sqlite3
 import sys
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import jwt
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -49,6 +49,7 @@ TOKEN_EXPIRY_HOURS = 24
 LOGGER = logging.getLogger(__name__)
 PASSWORD_CTX = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_LAST_RESEND_DIAGNOSTICS: Optional[Dict[str, Any]] = None
 
 router = APIRouter(tags=["SaaS"])
 
@@ -324,7 +325,43 @@ def resend_enabled() -> bool:
     return bool(RESEND_API_KEY and RESEND_FROM)
 
 
+def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
+    if _LAST_RESEND_DIAGNOSTICS is None:
+        return None
+    return dict(_LAST_RESEND_DIAGNOSTICS)
+
+
+def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
+    global _LAST_RESEND_DIAGNOSTICS
+    _LAST_RESEND_DIAGNOSTICS = dict(diagnostics) if diagnostics else None
+
+
+def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str, Any]:
+    diagnostics: Dict[str, Any] = {"provider": "resend", "status_code": response.status_code}
+    request_id = response.headers.get("x-request-id") or response.headers.get("x-resend-request-id")
+    if request_id:
+        diagnostics["request_id"] = request_id
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+
+    if isinstance(body, dict):
+        for key in ("error", "name", "message", "code"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                diagnostics[key] = value.strip()[:200]
+    else:
+        text = response.text.strip()
+        if text:
+            diagnostics["message"] = text[:200]
+
+    return diagnostics
+
+
 def send_resend_email(to: str, subject: str, html_body: str) -> bool:
+    _set_last_resend_diagnostics(None)
     if not resend_enabled() or not to:
         return False
     payload: Dict[str, Any] = {
@@ -335,17 +372,24 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
     }
     if RESEND_REPLY_TO:
         payload["reply_to"] = RESEND_REPLY_TO
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=8):
-            return True
-    except Exception as exc:
-        LOGGER.warning("Resend delivery failed: %s", exc)
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            json=payload,
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            timeout=httpx.Timeout(8.0, connect=5.0),
+        )
+        response.raise_for_status()
+        return True
+    except httpx.HTTPStatusError as exc:
+        diagnostics = _safe_resend_diagnostics_from_response(exc.response)
+        _set_last_resend_diagnostics(diagnostics)
+        LOGGER.warning("Resend delivery failed: %s", diagnostics)
+        return False
+    except httpx.RequestError as exc:
+        diagnostics = {"provider": "resend", "error": "request_error", "message": str(exc)[:200]}
+        _set_last_resend_diagnostics(diagnostics)
+        LOGGER.warning("Resend delivery failed: %s", diagnostics)
         return False
 
 
@@ -624,7 +668,12 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
 
     email_sent = send_verification_email(email, raw_token)
     if resend_enabled() and not email_sent:
-        safe_log_activity(profile_id, "profile_signup_email_failed", {"email": email, "email_sent": email_sent})
+        diagnostics = get_last_resend_diagnostics() or {"provider": "resend", "status": "failed"}
+        safe_log_activity(
+            profile_id,
+            "profile_signup_email_failed",
+            {"email": email, "email_sent": email_sent, "diagnostics": diagnostics},
+        )
         raise HTTPException(
             status_code=502,
             detail={
@@ -632,6 +681,7 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
                 "message": "Verification email could not be sent. Please try again later.",
                 "profile_id": profile_id,
                 "email": email,
+                "diagnostics": diagnostics,
             },
         )
 
