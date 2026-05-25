@@ -20,20 +20,20 @@ async function runSignupDiagnostic(): Promise<SignupDiagnosticResult> {
       method: 'POST',
       body: JSON.stringify({}),
     })
-    return { ok: true as const }
+    return { ok: true }
   } catch (err) {
     const apiError = err as ApiError
     if (typeof apiError.status === 'number') {
       if (apiError.status === 422) {
-        return { ok: true as const }
+        return { ok: true }
       }
       return {
-        ok: false as const,
+        ok: false,
         message: `Signup API returned JSON error (${apiError.status}): ${apiError.message}`,
       }
     }
     return {
-      ok: false as const,
+      ok: false,
       message: err instanceof Error ? err.message : `Network/CORS failure while calling POST /v1/profile/signup at ${API_BASE_URL}`,
     }
   }
