@@ -36,12 +36,18 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM = os.environ.get("RESEND_FROM") or os.environ.get("RESEND_FROM_EMAIL") or "MAISB <hello@updates.maisb.app>"
 RESEND_REPLY_TO = os.environ.get("RESEND_REPLY_TO", "")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
-SESSION_SECRET = os.environ.get("SESSION_SECRET", os.environ.get("ADMIN_KEY", "dev_only_session_secret"))
+SESSION_SECRET = (
+    os.environ.get("JWT_SECRET")
+    or os.environ.get("MAISB_JWT_SECRET")
+    or os.environ.get("SESSION_SECRET")
+    or os.environ.get("ADMIN_KEY")
+    or "dev_only_session_secret"
+)
 SESSION_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS", "12"))
 TOKEN_EXPIRY_HOURS = 24
 
 LOGGER = logging.getLogger(__name__)
-PASSWORD_CTX = CryptContext(schemes=["bcrypt"], deprecated="auto")
+PASSWORD_CTX = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 router = APIRouter(tags=["SaaS"])
@@ -73,6 +79,10 @@ def is_production_env() -> bool:
         os.environ.get("RAILWAY_ENVIRONMENT", ""),
     ]
     return any(v.lower() in {"prod", "production"} for v in checks if v)
+
+
+if is_production_env() and SESSION_SECRET in {"", "dev_only_session_secret", "change_me_in_production"}:
+    LOGGER.warning("JWT secret is not configured. Set JWT_SECRET or MAISB_JWT_SECRET in production.")
 
 
 def bearer_token(authorization: Optional[str]) -> str:
@@ -146,6 +156,15 @@ def init_profile_db() -> None:
         )
         """
     )
+    for col, ddl in {
+        "id": "id TEXT",
+        "profile_id": "profile_id TEXT",
+        "token_hash": "token_hash TEXT",
+        "expires_at": "expires_at TEXT",
+        "used_at": "used_at TEXT",
+        "created_at": "created_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "email_verifications", col, ddl)
 
     conn.execute(
         """
@@ -170,6 +189,11 @@ def init_profile_db() -> None:
     )
 
     for col, ddl in {
+        "key": "key TEXT",
+        "plan": "plan TEXT DEFAULT 'free'",
+        "scan_count": "scan_count INTEGER DEFAULT 0",
+        "email": "email TEXT",
+        "created": "created TEXT",
         "key_id": "key_id TEXT",
         "profile_id": "profile_id TEXT",
         "key_hash": "key_hash TEXT",
@@ -194,6 +218,14 @@ def init_profile_db() -> None:
         )
         """
     )
+    for col, ddl in {
+        "key_id": "key_id TEXT",
+        "profile_id": "profile_id TEXT",
+        "email": "email TEXT",
+        "key_hash": "key_hash TEXT",
+        "created_at": "created_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "profile_api_keys", col, ddl)
 
     conn.execute(
         """
@@ -212,6 +244,20 @@ def init_profile_db() -> None:
         )
         """
     )
+    for col, ddl in {
+        "id": "id INTEGER",
+        "profile_id": "profile_id TEXT",
+        "api_key_id": "api_key_id TEXT",
+        "decision": "decision TEXT",
+        "risk_score": "risk_score REAL",
+        "taxonomy_class": "taxonomy_class TEXT",
+        "channel": "channel TEXT",
+        "objective": "objective TEXT",
+        "trace_id": "trace_id TEXT",
+        "boundary_status": "boundary_status TEXT",
+        "created_at": "created_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "scan_events", col, ddl)
 
     conn.execute(
         """
@@ -227,6 +273,17 @@ def init_profile_db() -> None:
         )
         """
     )
+    for col, ddl in {
+        "trace_id": "trace_id TEXT",
+        "profile_id": "profile_id TEXT",
+        "channels_json": "channels_json TEXT",
+        "trust_score": "trust_score REAL",
+        "degradation_score": "degradation_score REAL",
+        "final_decision": "final_decision TEXT",
+        "created_at": "created_at TEXT",
+        "updated_at": "updated_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "cross_channel_traces", col, ddl)
 
     conn.execute(
         """
@@ -239,6 +296,14 @@ def init_profile_db() -> None:
         )
         """
     )
+    for col, ddl in {
+        "id": "id INTEGER",
+        "profile_id": "profile_id TEXT",
+        "action": "action TEXT",
+        "metadata_json": "metadata_json TEXT",
+        "created_at": "created_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "activity_logs", col, ddl)
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(lower(email))")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token_hash)")
@@ -293,6 +358,27 @@ def send_verification_email(email: str, raw_token: str) -> bool:
         f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"
     )
     return send_resend_email(email, "Verify your MAISB account", body)
+
+
+def safe_log_activity(profile_id: str, action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        log_activity(profile_id, action, metadata)
+    except Exception as exc:
+        LOGGER.warning("Activity log failed for %s: %s", action, exc)
+
+
+def hash_password(password: str) -> str:
+    try:
+        return PASSWORD_CTX.hash(password)
+    except Exception:
+        return PASSWORD_CTX.hash(password, scheme="pbkdf2_sha256")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return PASSWORD_CTX.verify(password, password_hash)
+    except Exception:
+        return False
 
 
 def profile_id_from_row(row: sqlite3.Row) -> str:
@@ -435,51 +521,108 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
     if not is_valid_email(body.email):
         raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Valid email is required"})
 
-    conn = get_conn()
     email = body.email.strip().lower()
     now = utcnow()
+    conn = get_conn()
+    created = False
+    raw_token = ""
+    profile_id = ""
+    try:
+        cols = table_columns(conn, "profiles")
+        existing = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+        if existing and existing["verified"]:
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists. Please log in.",
+            )
 
-    existing = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
-    if existing and existing["verified"]:
-        conn.close()
-        raise HTTPException(status_code=409, detail={"error": "already_exists", "message": "Email already verified. Use /v1/profile/login"})
+        profile_id = str(existing["id"]) if existing and existing["id"] else f"prof_{secrets.token_hex(8)}"
+        password_hash = hash_password(body.password)
 
-    profile_id = existing["id"] if existing and existing["id"] else f"prof_{secrets.token_hex(8)}"
-    password_hash = PASSWORD_CTX.hash(body.password)
+        if existing is None:
+            try:
+                if "profile_id" in cols:
+                    conn.execute(
+                        "INSERT INTO profiles (id, profile_id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
+                        (profile_id, profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO profiles (id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
+                        (profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+                    )
+                created = True
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                existing = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+                if existing and existing["verified"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="An account with this email already exists. Please log in.",
+                    )
+                if existing and existing["id"]:
+                    profile_id = str(existing["id"])
 
-    cols = table_columns(conn, "profiles")
-    if existing:
-        conn.execute(
-            "UPDATE profiles SET name=?, company=?, use_case=?, password_hash=?, updated_at=? WHERE lower(email)=lower(?)",
+        update_result = conn.execute(
+            "UPDATE profiles SET name=?, company=?, use_case=?, password_hash=?, verified=0, updated_at=? WHERE lower(email)=lower(?) AND COALESCE(verified, 0)=0",
             (body.name.strip(), body.company, body.use_case, password_hash, now, email),
         )
-    else:
-        if "profile_id" in cols:
-            conn.execute(
-                "INSERT INTO profiles (id, profile_id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
-                (profile_id, profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO profiles (id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'free', ?, ?)",
-                (profile_id, body.name.strip(), email, body.company, body.use_case, password_hash, now, now),
+        if update_result.rowcount == 0:
+            current = conn.execute("SELECT verified FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+            if current and current["verified"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="An account with this email already exists. Please log in.",
+                )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "signup_failed",
+                    "message": "Unable to create or update the signup record.",
+                    "email": email,
+                },
             )
 
-    raw_token = secrets.token_urlsafe(32)
-    token_hash = sha256(raw_token)
-    verification_id = f"ver_{secrets.token_hex(10)}"
-    expires_at = (dt.datetime.utcnow() + dt.timedelta(hours=TOKEN_EXPIRY_HOURS)).isoformat()
-
-    conn.execute(
-        "INSERT INTO email_verifications (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
-        (verification_id, profile_id, token_hash, expires_at, now),
-    )
-    conn.commit()
-    conn.close()
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = sha256(raw_token)
+        verification_id = f"ver_{secrets.token_hex(10)}"
+        expires_at = (dt.datetime.utcnow() + dt.timedelta(hours=TOKEN_EXPIRY_HOURS)).isoformat()
+        conn.execute(
+            "INSERT INTO email_verifications (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+            (verification_id, profile_id, token_hash, expires_at, now),
+        )
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        LOGGER.warning("Signup integrity error for %s: %s", email, exc)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "signup_conflict",
+                "message": "Unable to complete signup because this email is already in use.",
+                "email": email,
+            },
+        )
+    except Exception as exc:
+        conn.rollback()
+        LOGGER.exception("Signup failed for %s", email)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "signup_failed",
+                "message": "Signup could not be completed.",
+                "email": email,
+            },
+        ) from exc
+    finally:
+        conn.close()
 
     email_sent = send_verification_email(email, raw_token)
     if resend_enabled() and not email_sent:
-        log_activity(profile_id, "profile_signup_email_failed", {"email": email, "email_sent": email_sent})
+        safe_log_activity(profile_id, "profile_signup_email_failed", {"email": email, "email_sent": email_sent})
         raise HTTPException(
             status_code=502,
             detail={
@@ -491,16 +634,17 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
         )
 
     response: Dict[str, Any] = {
-        "created": True,
+        "created": created,
         "status": "pending_verification",
         "profile_id": profile_id,
         "email": email,
         "email_sent": email_sent,
     }
+    response["message"] = "Verification email sent." if created else "Verification email resent."
     if not email_sent and not is_production_env() and not resend_enabled():
         response["dev_verification_token"] = raw_token
 
-    log_activity(profile_id, "profile_signup", {"email": email, "email_sent": email_sent})
+    safe_log_activity(profile_id, "profile_signup", {"email": email, "email_sent": email_sent, "created": created})
     return response
 
 
@@ -532,7 +676,7 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
     conn.commit()
     conn.close()
 
-    log_activity(row["profile_id"], "profile_verify_email", {"email": email_row["email"] if email_row else None})
+    safe_log_activity(row["profile_id"], "profile_verify_email", {"email": email_row["email"] if email_row else None})
     return {"verified": True, "email": email_row["email"] if email_row else None}
 
 
@@ -547,13 +691,13 @@ def profile_login(body: ProfileLoginRequest) -> Dict[str, Any]:
 
     if not profile:
         raise HTTPException(status_code=401, detail={"error": "invalid_credentials", "message": "Invalid email or password"})
-    if not profile["password_hash"] or not PASSWORD_CTX.verify(body.password, profile["password_hash"]):
+    if not profile["password_hash"] or not verify_password(body.password, profile["password_hash"]):
         raise HTTPException(status_code=401, detail={"error": "invalid_credentials", "message": "Invalid email or password"})
     if not profile["verified"]:
         raise HTTPException(status_code=403, detail={"error": "email_not_verified", "message": "Verify your email before login"})
 
     token = create_session_token(profile["id"], profile["email"])
-    log_activity(profile["id"], "profile_login", {"email": profile["email"]})
+    safe_log_activity(profile["id"], "profile_login", {"email": profile["email"]})
     return {
         "token_type": "Bearer",
         "session_token": token,
@@ -627,10 +771,10 @@ def select_plan(body: PlanSelectRequest, authorization: Optional[str] = Header(N
         conn.execute("UPDATE profiles SET plan='free', updated_at=? WHERE id=?", (utcnow(), profile["id"]))
         conn.commit()
         conn.close()
-        log_activity(profile["id"], "plan_select", {"plan": "free"})
+        safe_log_activity(profile["id"], "plan_select", {"plan": "free"})
         return {"plan": "free", "selected": True, "coming_soon": False}
 
-    log_activity(profile["id"], "plan_select", {"plan": selected_plan, "coming_soon": True})
+    safe_log_activity(profile["id"], "plan_select", {"plan": selected_plan, "coming_soon": True})
     return {
         "plan": selected_plan,
         "selected": False,
@@ -712,7 +856,7 @@ def create_api_key(body: APIKeyCreateRequest, authorization: Optional[str] = Hea
     conn.commit()
     conn.close()
 
-    log_activity(profile["id"], "api_key_create", {"key_id": key_id, "name": body.name, "scopes": body.scopes})
+    safe_log_activity(profile["id"], "api_key_create", {"key_id": key_id, "name": body.name, "scopes": body.scopes})
 
     return {
         "key_id": key_id,
@@ -745,7 +889,7 @@ def rotate_api_key(key_id: str, authorization: Optional[str] = Header(None)) -> 
     conn.close()
 
     created = create_api_key(APIKeyCreateRequest(name="Rotated key", scopes=["scan"]), authorization)
-    log_activity(profile["id"], "api_key_rotate", {"old_key_id": key_id, "new_key_id": created["key_id"]})
+    safe_log_activity(profile["id"], "api_key_rotate", {"old_key_id": key_id, "new_key_id": created["key_id"]})
     return {"rotated": True, "old_key_id": key_id, "new": created}
 
 
@@ -768,7 +912,7 @@ def revoke_api_key(key_id: str, authorization: Optional[str] = Header(None)) -> 
     conn.commit()
     conn.close()
 
-    log_activity(profile["id"], "api_key_revoke", {"key_id": key_id})
+    safe_log_activity(profile["id"], "api_key_revoke", {"key_id": key_id})
     return {"revoked": True, "key_id": key_id, "revoked_at": now}
 
 
@@ -1106,7 +1250,7 @@ def compliance_report(body: ComplianceRequest, authorization: Optional[str] = He
     events = collect_scan_events(profile["id"])
     report_id = f"compliance_{secrets.token_hex(6)}"
     summary = _summary_from_events(events)
-    log_activity(profile["id"], "report_compliance", {"framework": body.framework, "report_id": report_id})
+    safe_log_activity(profile["id"], "report_compliance", {"framework": body.framework, "report_id": report_id})
     return {
         "report_id": report_id,
         "framework": body.framework,
@@ -1120,7 +1264,7 @@ def compliance_report(body: ComplianceRequest, authorization: Optional[str] = He
 def schedule_report(body: ScheduleReportRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
     schedule_id = f"sched_{secrets.token_hex(6)}"
-    log_activity(profile["id"], "report_schedule", {"cadence": body.cadence, "schedule_id": schedule_id})
+    safe_log_activity(profile["id"], "report_schedule", {"cadence": body.cadence, "schedule_id": schedule_id})
     return {
         "schedule_id": schedule_id,
         "cadence": body.cadence,
@@ -1154,7 +1298,7 @@ def team_invite(body: TeamInviteRequest, authorization: Optional[str] = Header(N
         raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Valid email is required"})
 
     invite_id = f"invite_{secrets.token_hex(6)}"
-    log_activity(profile["id"], "team_invite", {"invite_id": invite_id, "email": body.email, "role": body.role})
+    safe_log_activity(profile["id"], "team_invite", {"invite_id": invite_id, "email": body.email, "role": body.role})
     return {
         "invited": True,
         "invite_id": invite_id,
@@ -1168,7 +1312,7 @@ def team_invite(body: TeamInviteRequest, authorization: Optional[str] = Header(N
 @router.patch("/v1/team/{member_id}/role")
 def team_role_patch(member_id: str, body: TeamRolePatchRequest, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     profile, _ = resolve_profile_from_bearer(authorization, allow_api_key=False)
-    log_activity(profile["id"], "team_role_patch", {"member_id": member_id, "role": body.role})
+    safe_log_activity(profile["id"], "team_role_patch", {"member_id": member_id, "role": body.role})
     return {
         "member_id": member_id,
         "role": body.role,
