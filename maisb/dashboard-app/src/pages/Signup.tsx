@@ -48,11 +48,12 @@ function formatSignupError(err: unknown): string {
 }
 
 export default function Signup() {
-  const [form, setForm] = useState({ name: '', email: '', company: '', use_case: '', password: '' })
+  const [form, setForm] = useState({ name: '', email: '', company: '', use_case: '', password: '', confirm_password: '' })
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [apiStatus, setApiStatus] = useState<'checking' | 'online' | 'blocked'>('checking')
+  const [passwordError, setPasswordError] = useState('')
   const diagnosticAttemptRef = useRef<Promise<SignupDiagnosticResult> | null>(null)
 
   useEffect(() => {
@@ -80,8 +81,20 @@ export default function Signup() {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
-    setLoading(true)
+    setPasswordError('')
     setError('')
+
+    // Validate password requirements
+    if (form.password.length < 8) {
+      setPasswordError('Password must be at least 8 characters')
+      return
+    }
+    if (form.password !== form.confirm_password) {
+      setPasswordError('Passwords do not match')
+      return
+    }
+
+    setLoading(true)
     try {
       if (SIGNUP_DIAGNOSTICS_ENABLED) {
         if (!diagnosticAttemptRef.current) {
@@ -229,7 +242,22 @@ export default function Signup() {
                 minLength={8}
               />
             </div>
+            <div>
+              <label style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.35rem', display: 'block' }}>
+                Confirm password
+              </label>
+              <input
+                required
+                type="password"
+                value={form.confirm_password}
+                onChange={(e) => setForm({ ...form, confirm_password: e.target.value })}
+                placeholder="••••••••"
+                minLength={8}
+              />
+            </div>
           </div>
+
+          {passwordError && <p className="error">{passwordError}</p>}
 
           <Button type="submit" disabled={loading} style={{ width: '100%', marginBottom: '1rem' }}>
             {loading ? 'Creating…' : 'Create secure account'}

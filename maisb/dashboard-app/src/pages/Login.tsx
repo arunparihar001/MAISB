@@ -82,6 +82,9 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
               />
+              <div style={{ textAlign: 'right', marginTop: '0.35rem' }}>
+                <Link to="/forgot-password" style={{ fontSize: '0.75rem', color: '#67e8f9' }}>Forgot password?</Link>
+              </div>
             </div>
           </div>
 
@@ -89,8 +92,62 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Enter workspace'}
           </Button>
 
-          <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <Link to="/signup" style={{ fontSize: '0.9rem' }}>Need an account? Sign up →</Link>
+          </div>
+
+          {/* Enterprise SSO Section */}
+          <div style={{ marginBottom: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid #334155' }}>
+            <p style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', marginBottom: '1rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Enterprise SSO</p>
+            <p style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', marginBottom: '1rem' }}>Google Workspace, Microsoft Entra ID, Okta / SAML</p>
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <button
+                disabled
+                style={{
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid #334155',
+                  backgroundColor: 'rgba(30, 41, 59, 0.5)',
+                  color: '#94a3b8',
+                  cursor: 'not-allowed',
+                  fontSize: '0.9rem',
+                  fontWeight: 500,
+                }}
+              >
+                Continue with Google
+              </button>
+              <button
+                disabled
+                style={{
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid #334155',
+                  backgroundColor: 'rgba(30, 41, 59, 0.5)',
+                  color: '#94a3b8',
+                  cursor: 'not-allowed',
+                  fontSize: '0.9rem',
+                  fontWeight: 500,
+                }}
+              >
+                Continue with Microsoft
+              </button>
+              <button
+                disabled
+                style={{
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid #334155',
+                  backgroundColor: 'rgba(30, 41, 59, 0.5)',
+                  color: '#94a3b8',
+                  cursor: 'not-allowed',
+                  fontSize: '0.9rem',
+                  fontWeight: 500,
+                }}
+              >
+                Continue with Okta / SAML
+              </button>
+            </div>
+            <p style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', marginTop: '0.75rem' }}>Enterprise SSO is available during enterprise rollout.</p>
           </div>
 
           {error && <p className="error">{error}</p>}

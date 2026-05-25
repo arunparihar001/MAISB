@@ -15,9 +15,9 @@ export default function Landing() {
         <div className="row-inline">
           <a href="#features">Product</a>
           <a href="#developers">Developers</a>
-          <a href="#security">Security</a>
+          <Link to="/about">About</Link>
           <Link to="/pricing">Pricing</Link>
-          <a href="https://docs.maisb.app" target="_blank" rel="noopener noreferrer">Docs</a>
+          <Link to="/docs">Docs</Link>
           <Link to="/login"><Button variant="secondary">Sign in</Button></Link>
           <Link to="/signup"><Button>Get started</Button></Link>
         </div>
@@ -34,7 +34,7 @@ export default function Landing() {
             </p>
             <div className="row-inline">
               <Link to="/signup"><Button>Start for free</Button></Link>
-              <a href="https://docs.maisb.app/api" target="_blank" rel="noopener noreferrer"><Button variant="secondary">View API docs</Button></a>
+              <Link to="/docs/api"><Button variant="secondary">View API docs</Button></Link>
             </div>
           </div>
 
@@ -361,6 +361,71 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* Developer Section */}
+      <section id="developers" style={{ marginBottom: '3rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <p className="eyebrow">For developers</p>
+          <h2>API-first, SDK-ready</h2>
+          <p className="muted" style={{ maxWidth: '60ch', margin: '0.5rem auto' }}>Integrate boundary protection in minutes with our HTTPS API and starter client implementations.</p>
+        </div>
+
+        {/* API Example */}
+        <div className="grid two-col" style={{ marginBottom: '1.5rem' }}>
+          <Card title="Quick API Request" subtitle="POST /v1/scan endpoint">
+            <div style={{ backgroundColor: '#0f172a', padding: '1rem', borderRadius: '8px', overflow: 'auto', marginBottom: '1rem', fontSize: '0.75rem', lineHeight: '1.4', color: '#cbd5e1', fontFamily: 'monospace' }}>
+              <pre style={{ margin: 0 }}>
+{`curl -X POST https://api.maisb.app/v1/scan \\
+  -H "Authorization: Bearer KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+  "channel": "clipboard",
+  "content": "User input",
+  "agent_id": "my-ai-v1",
+  "session_id": "sess-123"
+}'`}
+              </pre>
+            </div>
+            <Link to="/docs/api"><Button variant="secondary" style={{ width: '100%' }}>API Reference →</Button></Link>
+          </Card>
+
+          <Card title="Starter Clients" subtitle="JavaScript, Python, Kotlin">
+            <ul className="bullet-list" style={{ margin: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
+              <li>JavaScript/TypeScript fetch client</li>
+              <li>Python requests implementation</li>
+              <li>Android/Kotlin OkHttp pattern</li>
+              <li>Error handling & retry logic</li>
+            </ul>
+            <Link to="/docs/sdk"><Button variant="secondary" style={{ width: '100%' }}>SDK Guides →</Button></Link>
+          </Card>
+        </div>
+
+        {/* Code Examples */}
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <p className="eyebrow">Real-world examples</p>
+          <h3 style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>Common integration scenarios</h3>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+          <Card title="Clipboard Scanning" subtitle="Protect paste-based injection">
+            <p className="muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>When users paste content into your AI agent, scan with /v1/scan first.</p>
+            <Link to="/docs/examples"><Button variant="secondary" style={{ width: '100%' }}>View examples →</Button></Link>
+          </Card>
+          <Card title="QR Code Payloads" subtitle="Validate decoded content">
+            <p className="muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>Scan QR-decoded data before passing to AI context.</p>
+            <Link to="/docs/examples"><Button variant="secondary" style={{ width: '100%' }}>View examples →</Button></Link>
+          </Card>
+          <Card title="Cross-Channel Tracing" subtitle="Correlate multi-channel attacks">
+            <p className="muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>Use session_id to link scans across channels and detect coordinated attacks.</p>
+            <Link to="/docs/examples"><Button variant="secondary" style={{ width: '100%' }}>View examples →</Button></Link>
+          </Card>
+        </div>
+
+        {/* Docs CTA */}
+        <div style={{ textAlign: 'center' }}>
+          <Link to="/docs"><Button>Read full documentation →</Button></Link>
+        </div>
+      </section>
+
       {/* Final CTA */}
       <section style={{ marginBottom: '3rem', textAlign: 'center' }}>
         <h2>Start protecting mobile AI channels today.</h2>
@@ -381,23 +446,23 @@ export default function Landing() {
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.5rem' }}>
               <li><a href="#features">Features</a></li>
               <li><Link to="/pricing">Pricing</Link></li>
-              <li><a href="https://docs.maisb.app" target="_blank" rel="noopener noreferrer">Documentation</a></li>
+              <li><Link to="/docs">Documentation</Link></li>
             </ul>
           </div>
           <div>
             <p><strong>Developers</strong></p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.5rem' }}>
-              <li><a href="https://docs.maisb.app/api" target="_blank" rel="noopener noreferrer">API Reference</a></li>
-              <li><a href="https://docs.maisb.app/sdk" target="_blank" rel="noopener noreferrer">SDK Guides</a></li>
-              <li><a href="https://docs.maisb.app/examples" target="_blank" rel="noopener noreferrer">Code Examples</a></li>
+              <li><Link to="/docs/api">API Reference</Link></li>
+              <li><Link to="/docs/sdk">SDK Guides</Link></li>
+              <li><Link to="/docs/examples">Code Examples</Link></li>
             </ul>
           </div>
           <div>
             <p><strong>Company</strong></p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.5rem' }}>
-              <li><a href="https://maisb.app/about" target="_blank" rel="noopener noreferrer">About</a></li>
-              <li><a href="https://maisb.app/blog" target="_blank" rel="noopener noreferrer">Blog</a></li>
-              <li><a href="https://maisb.app/contact" target="_blank" rel="noopener noreferrer">Contact</a></li>
+              <li><Link to="/about">About</Link></li>
+              <li><Link to="/blog">Blog</Link></li>
+              <li><Link to="/contact">Contact</Link></li>
             </ul>
           </div>
           <div>

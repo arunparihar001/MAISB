@@ -23,6 +23,14 @@ import Team from './pages/Team'
 import Terms from './pages/Terms'
 import Traces from './pages/Traces'
 import VerifyEmail from './pages/VerifyEmail'
+import Docs from './pages/Docs'
+import DocsApi from './pages/DocsApi'
+import DocsSdk from './pages/DocsSdk'
+import DocsExamples from './pages/DocsExamples'
+import About from './pages/About'
+import Blog from './pages/Blog'
+import Contact from './pages/Contact'
+import ForgotPassword from './pages/ForgotPassword'
 
 type Gate = 'ok' | 'login' | 'verify-email' | 'select-plan' | 'api-keys'
 
@@ -95,6 +103,13 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/pricing" element={<Pricing />} />
+      <Route path="/about" element={<About />} />
+      <Route path="/blog" element={<Blog />} />
+      <Route path="/contact" element={<Contact />} />
+      <Route path="/docs" element={<Docs />} />
+      <Route path="/docs/api" element={<DocsApi />} />
+      <Route path="/docs/sdk" element={<DocsSdk />} />
+      <Route path="/docs/examples" element={<DocsExamples />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/refund" element={<Refund />} />
@@ -102,6 +117,7 @@ export default function App() {
       <Route path="/signup" element={<AuthEntry><Signup /></AuthEntry>} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/login" element={<AuthEntry><Login /></AuthEntry>} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
 
       <Route path="/select-plan" element={<RequireVerified><SelectPlan /></RequireVerified>} />
       <Route path="/api-keys" element={<RequireVerified><ApiKeys /></RequireVerified>} />
