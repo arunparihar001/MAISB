@@ -29,7 +29,7 @@ a {
 a:hover { color: #dbeafe; text-decoration: none; }
 
 h1, h2, h3, p { margin-top: 0; }
-h1 { font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.02; letter-spacing: -0.04em; }
+h1 { font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.1; letter-spacing: -0.04em; }
 h2 { font-size: 1.4rem; letter-spacing: -0.03em; }
 h3 { font-size: 1.05rem; letter-spacing: -0.02em; }
 
@@ -363,7 +363,7 @@ input:focus, select:focus, textarea:focus {
   width: 76%;
   height: 2px;
   background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.9), rgba(16, 185, 129, 0.9), transparent);
-  filter: blur(.1px);
+  filter: blur(1px);
   animation: sweep 5.5s linear infinite;
 }
 .scan-visual__node,

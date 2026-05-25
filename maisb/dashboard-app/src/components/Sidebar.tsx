@@ -30,10 +30,10 @@ export default function Sidebar() {
         <span className="status-chip">Enterprise dashboard</span>
       </div>
       <nav className="sidebar-nav">
-        {links.map((link) => (
-          <NavLink key={link.to} to={link.to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`.trim()}>
-            <link.icon className="nav-icon" />
-            <span>{link.label}</span>
+        {links.map((navItem) => (
+          <NavLink key={navItem.to} to={navItem.to} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`.trim()}>
+            <navItem.icon className="nav-icon" />
+            <span>{navItem.label}</span>
           </NavLink>
         ))}
       </nav>
