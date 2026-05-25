@@ -120,6 +120,21 @@ def test_cors_preflight_allows_production_signup_origin(monkeypatch, tmp_path):
         assert "content-type" in response.headers["access-control-allow-headers"].lower()
 
 
+def test_cors_test_endpoint_reports_origin(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    client = TestClient(scan_api.app)
+
+    response = client.get("/v1/cors-test", headers={"Origin": "https://app.maisb.app"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "service": "maisb-api",
+        "origin": "https://app.maisb.app",
+        "cors": "enabled",
+    }
+
+
 def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_path):
     scan_api = setup_test_scan_app(
         monkeypatch,
