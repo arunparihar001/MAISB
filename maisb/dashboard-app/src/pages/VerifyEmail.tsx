@@ -33,11 +33,12 @@ export default function VerifyEmail() {
 
   return (
     <main className="auth-page">
-      <form className="auth-card" onSubmit={onSubmit}>
+      <form className="auth-card glass-card" onSubmit={onSubmit}>
+        <p className="eyebrow">Verification boundary</p>
         <h1>Verify Email</h1>
-        <p className="muted">Paste your verification token and continue.</p>
+        <p className="muted">Paste your verification token to complete trusted access.</p>
         <input required value={token} onChange={(e) => setToken(e.target.value)} placeholder="Verification token" />
-        <button type="submit" disabled={status === 'loading'}>{status === 'loading' ? 'Verifying…' : 'Verify'}</button>
+        <button type="submit" disabled={status === 'loading'}>{status === 'loading' ? 'Verifying…' : 'Verify token'}</button>
         <Link to="/login">Back to login</Link>
         {message && <p className="notice">{message}</p>}
         {error && <p className="error">{error}</p>}

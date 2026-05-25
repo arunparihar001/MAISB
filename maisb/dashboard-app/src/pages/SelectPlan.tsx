@@ -55,8 +55,13 @@ export default function SelectPlan() {
 
   return (
     <main className="onboarding-page">
-      <h1>Select your plan</h1>
-      <p className="muted">Free is active today. Pro and Certify are invoice-based during rollout.</p>
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Plan selection</p>
+          <h1>Select your plan</h1>
+          <p className="muted">Free is active today. Pro, Enterprise, and Certify are invoice-based during rollout.</p>
+        </div>
+      </div>
       <section className="grid">
         {plans.map((plan) => (
           <PlanCard
@@ -71,7 +76,7 @@ export default function SelectPlan() {
           />
         ))}
       </section>
-      <Card>
+      <Card title="Commercial posture">
         <p className="muted">Online checkout is being configured. We do not currently collect card payments directly on this website. For Pro, Enterprise, or MAISB Certify, request an invoice or contact sales.</p>
       </Card>
       {message && <p className="notice">{message}</p>}

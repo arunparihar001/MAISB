@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import Badge from '../components/Badge'
 import Card from '../components/Card'
 import DataTable from '../components/DataTable'
 import { apiRequest } from '../lib/api'
@@ -36,8 +37,15 @@ export default function Security() {
 
   return (
     <main className="stack">
-      <h1>Security Events</h1>
-      <Card title="Risk timeline">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Operational logs</p>
+          <h1>Security Events</h1>
+          <p className="muted">Critical, high, medium, and low events are surfaced with an audit-friendly timeline.</p>
+        </div>
+        <Badge>Sample data</Badge>
+      </div>
+      <Card title="Risk timeline" subtitle="Recent boundary pressure">
         <div className="timeline-risk">
           {timeline.slice(-20).map((point) => (
             <div key={`${point.created_at}-${point.risk_score}`} className="risk-dot" style={{ height: `${20 + point.risk_score * 90}px` }} title={`${point.decision} ${point.risk_score}`} />
@@ -45,7 +53,7 @@ export default function Security() {
         </div>
       </Card>
 
-      <Card title="Recent blocked/reviewed events">
+      <Card title="Recent blocked/reviewed events" subtitle="Severity color coding is applied in the grid">
         <DataTable
           columns={[
             { key: 'time', label: 'Time', render: (row) => row.created_at },

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import Badge from '../components/Badge'
 import Card from '../components/Card'
 import TraceTimeline from '../components/TraceTimeline'
 import { apiRequest } from '../lib/api'
@@ -24,9 +25,16 @@ export default function Traces() {
 
   return (
     <main className="stack">
-      <h1>Cross-Channel Trace</h1>
-      <Card>
-        <p className="muted">Single-channel tools miss attacks that become dangerous across mobile context. MAISB tracks cross-channel behavior before the LLM acts.</p>
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Traceability</p>
+          <h1>Cross-Channel Trace</h1>
+          <p className="muted">Single-channel tools miss attacks that become dangerous across mobile context.</p>
+        </div>
+        <Badge>Sample data</Badge>
+      </div>
+      <Card title="Trace model" subtitle="Sequence-level risk narrative">
+        <p className="muted">MAISB tracks how mobile context accumulates before the LLM acts. Every trace shows channel lineage, trust degradation, and the final verdict.</p>
       </Card>
       <TraceTimeline traces={traces.slice(0, 20)} />
     </main>

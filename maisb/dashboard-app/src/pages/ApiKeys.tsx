@@ -126,7 +126,11 @@ export default function ApiKeys() {
   return (
     <main className="stack">
       <div className="page-head">
-        <h1>API Keys</h1>
+        <div>
+          <p className="eyebrow">Vault</p>
+          <h1>API Keys</h1>
+          <p className="muted">Raw keys are shown once. Sample data labels are used until live usage is available.</p>
+        </div>
         <div className="row-inline">
           <Button variant="secondary" onClick={() => setShowCreate(true)}>Generate API Key</Button>
           {isOnboarding && <Button onClick={() => navigate('/dashboard')}>Continue to Dashboard</Button>}
@@ -134,7 +138,7 @@ export default function ApiKeys() {
       </div>
 
       {generatedRawKey && (
-        <Card title="New API key generated" subtitle="This raw key is shown once. Save it now.">
+        <Card title="New API key generated" subtitle="This raw key is shown once. Save it now." className="vault-card">
           <p className="warning">Copy this key now. Do not expose production keys in GitHub, screenshots, or reports.</p>
           <code className="raw-key">{generatedRawKey}</code>
           <div className="row-inline" style={{ marginTop: '0.75rem' }}>
@@ -145,7 +149,7 @@ export default function ApiKeys() {
       )}
 
       {showCreate && (
-        <Card title="Generate API Key" subtitle="Set display name and scopes.">
+        <Card title="Generate API Key" subtitle="Set display name and scopes." className="vault-card">
           <form className="form-grid" onSubmit={onCreate}>
             <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Key name" required />
             <input value={scopeInput} onChange={(e) => setScopeInput(e.target.value)} placeholder="Scopes (comma-separated)" />

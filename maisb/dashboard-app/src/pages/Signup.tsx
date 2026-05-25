@@ -108,9 +108,11 @@ export default function Signup() {
   if (submitted) {
     return (
       <main className="auth-page">
-        <div className="auth-card">
+        <div className="auth-card glass-card">
+          <p className="eyebrow">Signup complete</p>
           <h1>Verification email sent</h1>
-          <p className="muted">Check your inbox for the token, then complete verification.</p>
+          <p className="muted">Check your inbox for the token, then complete verification to continue onboarding.</p>
+          <p className="muted">Security note: verification is required before workspace access is granted.</p>
           <Link to="/verify-email">Verify email</Link>
         </div>
       </main>
@@ -119,9 +121,10 @@ export default function Signup() {
 
   return (
     <main className="auth-page">
-      <form className="auth-card wide" onSubmit={onSubmit}>
+      <form className="auth-card wide glass-card" onSubmit={onSubmit}>
+        <p className="eyebrow">Secure workspace onboarding</p>
         <h1>Create account</h1>
-        <p className="muted">Enterprise workspace onboarding starts with email verification.</p>
+        <p className="muted">Enterprise workspace onboarding starts with email verification and a trusted boundary scan.</p>
         <p className="muted" aria-live="polite" role="status">
           API base: {API_BASE_URL} · API status: {apiStatus === 'online' ? 'Online' : apiStatus === 'blocked' ? 'API blocked or unreachable' : 'Checking…'}
         </p>
@@ -132,7 +135,7 @@ export default function Signup() {
           <input required value={form.use_case} onChange={(e) => setForm({ ...form, use_case: e.target.value })} placeholder="Use case" />
           <input required type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Password (min 8 chars)" minLength={8} />
         </div>
-        <button type="submit" disabled={loading}>{loading ? 'Creating…' : 'Sign up'}</button>
+        <button type="submit" disabled={loading}>{loading ? 'Creating…' : 'Create secure account'}</button>
         <Link to="/login">Already have an account? Login</Link>
         {error && <p className="error">{error}</p>}
       </form>
