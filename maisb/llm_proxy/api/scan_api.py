@@ -227,11 +227,12 @@ def cors_preflight_response(origin: Optional[str]) -> Response:
 
 
 def log_request_event(request: Request, status_code: int) -> None:
+    origin = request.headers.get("origin")
     LOGGER.info(
         "request method=%s path=%s origin=%s status=%s",
         request.method,
         request.url.path,
-        request.headers.get("origin") or "-",
+        origin if origin in _CORS_ALLOW_ORIGINS else "-",
         status_code,
     )
 

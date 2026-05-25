@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiRequest, type ApiError } from '../lib/api'
 import { API_BASE_URL } from '../lib/config'
@@ -10,9 +10,11 @@ type SignupResponse = {
   email_sent: boolean
 }
 
+type SignupDiagnosticResult = { ok: true } | { ok: false; message: string }
+
 const SIGNUP_DIAGNOSTICS_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_SIGNUP_DIAGNOSTICS === 'true'
 
-async function runSignupDiagnostic() {
+async function runSignupDiagnostic(): Promise<SignupDiagnosticResult> {
   try {
     await apiRequest('/v1/profile/signup', {
       method: 'POST',
@@ -54,6 +56,7 @@ export default function Signup() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [apiStatus, setApiStatus] = useState<'checking' | 'online' | 'blocked'>('checking')
+  const diagnosticAttemptRef = useRef<Promise<SignupDiagnosticResult> | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -84,9 +87,13 @@ export default function Signup() {
     setError('')
     try {
       if (SIGNUP_DIAGNOSTICS_ENABLED) {
-        const diagnostic = await runSignupDiagnostic()
+        if (!diagnosticAttemptRef.current) {
+          diagnosticAttemptRef.current = runSignupDiagnostic()
+        }
+        const diagnostic = await diagnosticAttemptRef.current
         if (!diagnostic.ok) {
           setError(diagnostic.message)
+          setLoading(false)
           return
         }
       }
