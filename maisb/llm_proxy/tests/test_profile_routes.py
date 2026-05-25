@@ -2,6 +2,7 @@ import re
 import sys
 from contextlib import closing
 
+import httpx
 from fastapi.testclient import TestClient
 
 MODULES_TO_CLEAR = ("api.scan_api", "api.profile_routes", "api.public_routes")
@@ -54,7 +55,7 @@ def test_signup_and_email_verification_flow(monkeypatch, tmp_path):
         captured["to"] = to
         captured["subject"] = subject
         captured["body"] = html_body
-        return True
+        return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
 
@@ -100,6 +101,115 @@ def test_signup_and_email_verification_flow(monkeypatch, tmp_path):
     assert len(token_row["token_hash"]) == 64
 
 
+def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
+    setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, *, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "MAISB <hello@updates.maisb.app>")
+    monkeypatch.setattr(profile_routes, "RESEND_REPLY_TO", "sales@maisb.app")
+
+    sent, diagnostics = profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>")
+    assert sent is True
+    assert diagnostics is None
+    assert captured["url"] == "https://api.resend.com/emails"
+    assert captured["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "MAISB/1.0",
+    }
+    assert captured["json"] == {
+        "from": "hello@updates.maisb.app",
+        "to": ["ada@example.com"],
+        "subject": "Verify",
+        "html": "<p>Body</p>",
+        "reply_to": "sales@maisb.app",
+    }
+    assert isinstance(captured["timeout"], httpx.Timeout)
+    assert captured["timeout"].read == 8.0
+    assert captured["timeout"].connect == 5.0
+    assert captured["timeout"].write == 8.0
+    assert captured["timeout"].pool == 8.0
+
+
+def test_send_resend_email_uses_bare_sender_when_already_canonical(monkeypatch, tmp_path):
+    setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, *, json=None, headers=None, timeout=None):
+        captured["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "hello@updates.maisb.app")
+
+    sent, diagnostics = profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>")
+    assert sent is True
+    assert diagnostics is None
+    assert captured["json"]["from"] == "hello@updates.maisb.app"
+
+
+def test_send_resend_email_records_provider_error_diagnostics(monkeypatch, tmp_path):
+    setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    request = httpx.Request("POST", "https://api.resend.com/emails")
+    provider_error = {
+        "error": "forbidden",
+        "message": "Sender domain is not verified for this workspace.",
+    }
+    response = httpx.Response(
+        403,
+        request=request,
+        json=provider_error,
+    )
+
+    def fake_post(*args, **kwargs):
+        raise httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "hello@updates.maisb.app")
+
+    sent, diagnostics = profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>")
+    assert sent is False
+    assert diagnostics == {
+        "provider": "resend",
+        "status_code": 403,
+        "provider_error": provider_error,
+        "error": "forbidden",
+        "message": "Sender domain is not verified for this workspace.",
+    }
+
+
 def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path):
     scan_api = setup_test_scan_app(monkeypatch, tmp_path)
     from api import profile_routes
@@ -108,7 +218,7 @@ def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path)
 
     def fake_send_resend_email(to, subject, html_body):
         sent_messages.append((to, subject, html_body))
-        return True
+        return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
 
@@ -171,7 +281,7 @@ def test_duplicate_verified_signup_returns_conflict(monkeypatch, tmp_path):
 
     def fake_send_resend_email(to, subject, html_body):
         sent_messages.append((to, subject, html_body))
-        return True
+        return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
 
@@ -259,9 +369,26 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
             "RESEND_FROM_EMAIL": "MAISB <hello@updates.maisb.app>",
         },
     )
+    provider_error = {
+        "error": "forbidden",
+        "message": "Sender domain is not verified for this workspace.",
+    }
     signup_route = next(route for route in scan_api.app.routes if getattr(route, "path", None) == "/v1/profile/signup")
     monkeypatch.setitem(signup_route.endpoint.__globals__, "resend_enabled", lambda: True)
-    monkeypatch.setitem(signup_route.endpoint.__globals__, "send_resend_email", lambda *args, **kwargs: False)
+    monkeypatch.setitem(
+        signup_route.endpoint.__globals__,
+        "send_verification_email",
+        lambda *args, **kwargs: (
+            False,
+            {
+                "provider": "resend",
+                "status_code": 403,
+                "error": "forbidden",
+                "provider_error": provider_error,
+                "message": "Sender domain is not verified for this workspace.",
+            },
+        ),
+    )
 
     client = TestClient(scan_api.app)
     response = client.post(
@@ -277,3 +404,10 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
 
     assert response.status_code == 502
     assert response.json()["detail"]["error"] == "verification_email_failed"
+    assert response.json()["detail"]["diagnostics"] == {
+        "provider": "resend",
+        "status_code": 403,
+        "error": "forbidden",
+        "provider_error": provider_error,
+        "message": "Sender domain is not verified for this workspace.",
+    }
