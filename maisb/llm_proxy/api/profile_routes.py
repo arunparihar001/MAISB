@@ -50,6 +50,7 @@ TOKEN_EXPIRY_HOURS = 24
 LOGGER = logging.getLogger(__name__)
 PASSWORD_CTX = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAX_DIAGNOSTIC_MESSAGE_LENGTH = 200
 _LAST_RESEND_DIAGNOSTICS: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     "last_resend_diagnostics",
     default=None,
@@ -344,27 +345,34 @@ def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
 
 
 def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str, Any]:
-    diagnostics: Dict[str, Any] = {"provider": "resend", "status_code": response.status_code}
-    request_id = response.headers.get("x-request-id") or response.headers.get("x-resend-request-id")
-    if request_id:
-        diagnostics["request_id"] = request_id
-
     try:
-        body = response.json()
-    except ValueError:
-        body = None
+        diagnostics: Dict[str, Any] = {"provider": "resend", "status_code": response.status_code}
+        request_id = response.headers.get("x-request-id") or response.headers.get("x-resend-request-id")
+        if request_id:
+            diagnostics["request_id"] = request_id
 
-    if isinstance(body, dict):
-        for key in ("error", "name", "message", "code"):
-            value = body.get(key)
-            if isinstance(value, str) and value.strip():
-                diagnostics[key] = value.strip()[:200]
-    else:
-        text = response.text.strip()
-        if text:
-            diagnostics["message"] = text[:200]
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
 
-    return diagnostics
+        if isinstance(body, dict):
+            for key in ("error", "name", "message", "code"):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    diagnostics[key] = value.strip()[:MAX_DIAGNOSTIC_MESSAGE_LENGTH]
+        else:
+            text = response.text.strip()
+            if text:
+                diagnostics["message"] = text[:MAX_DIAGNOSTIC_MESSAGE_LENGTH]
+
+        return diagnostics
+    except Exception as exc:
+        return {
+            "provider": "resend",
+            "error": "diagnostic_error",
+            "message": str(exc)[:MAX_DIAGNOSTIC_MESSAGE_LENGTH],
+        }
 
 
 def send_resend_email(to: str, subject: str, html_body: str) -> bool:

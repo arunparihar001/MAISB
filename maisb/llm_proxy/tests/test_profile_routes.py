@@ -141,6 +141,27 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
     assert captured["timeout"].connect == 5.0
 
 
+def test_send_resend_email_records_timeout_diagnostics(monkeypatch, tmp_path):
+    setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    request = httpx.Request("POST", "https://api.resend.com/emails")
+
+    def fake_post(*args, **kwargs):
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "MAISB <hello@updates.maisb.app>")
+
+    assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is False
+    assert profile_routes.get_last_resend_diagnostics() == {
+        "provider": "resend",
+        "error": "request_error",
+        "message": "timed out",
+    }
+
+
 def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path):
     scan_api = setup_test_scan_app(monkeypatch, tmp_path)
     from api import profile_routes
