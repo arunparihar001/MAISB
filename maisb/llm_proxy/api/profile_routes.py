@@ -283,9 +283,11 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
 
 
 def send_verification_email(email: str, raw_token: str) -> bool:
+    verify_url = f"{APP_DASHBOARD_URL.rstrip('/')}/verify-email"
     body = (
         "<p>Thanks for signing up for MAISB.</p>"
-        "<p>Use this verification token in <code>POST /v1/profile/verify-email</code>.</p>"
+        f"<p><a href='{html.escape(verify_url)}'>Verify your email</a></p>"
+        "<p>Or use this verification token in <code>POST /v1/profile/verify-email</code>.</p>"
         f"<pre>{html.escape(raw_token)}</pre>"
         "<p>This token expires in 24 hours and can only be used once.</p>"
         f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"

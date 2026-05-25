@@ -197,6 +197,17 @@ ROUTER_STATUS: Dict[str, Any] = {}
 INTERNAL_ROUTER_ERRORS: Dict[str, str] = {}
 
 
+# ── Enterprise sub-routers (profile auth + public info) ─────────────────────
+# These routes are required in production so signup/login flows stay mounted.
+from api.profile_routes import router as profile_router
+from api.public_routes import router as public_router
+
+app.include_router(profile_router)
+app.include_router(public_router)
+ROUTER_STATUS["profile_routes"] = {"loaded": True, "module": "api.profile_routes"}
+ROUTER_STATUS["public_routes"] = {"loaded": True, "module": "api.public_routes"}
+
+
 def include_optional_router(module_name: str, label: str) -> None:
     """Include Phase routers without killing app startup if a router is absent."""
     try:
@@ -217,10 +228,6 @@ include_optional_router("api.phase4_soc", "phase4_soc")
 include_optional_router("api.signup", "legacy_signup")
 include_optional_router("api.certify", "legacy_certify")
 include_optional_router("api.billing", "legacy_billing")
-
-# ── Enterprise sub-routers (profile auth + public info) ─────────────────────
-include_optional_router("api.profile_routes", "profile_routes")
-include_optional_router("api.public_routes", "public_routes")
 
 # ── Database helpers ─────────────────────────────────────────────────────────
 
@@ -1058,6 +1065,11 @@ def root() -> Dict[str, Any]:
         "certify": "POST /v1/commercial/certify/start",
         "soc": "/soc if Phase 4 router loaded",
     }
+
+
+@app.get("/health", tags=["System"])
+def health() -> Dict[str, Any]:
+    return {"ok": True, "service": "maisb-api"}
 
 
 @app.post("/v1/scan", response_model=ScanResponseBody, tags=["Scan"])
