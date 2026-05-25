@@ -197,6 +197,17 @@ ROUTER_STATUS: Dict[str, Any] = {}
 INTERNAL_ROUTER_ERRORS: Dict[str, str] = {}
 
 
+# ── Enterprise sub-routers (profile auth + public info) ─────────────────────
+# These routes are required in production so signup/login flows stay mounted.
+from api.profile_routes import router as profile_router
+from api.public_routes import router as public_router
+
+app.include_router(profile_router)
+app.include_router(public_router)
+ROUTER_STATUS["profile_routes"] = {"loaded": True, "module": "api.profile_routes"}
+ROUTER_STATUS["public_routes"] = {"loaded": True, "module": "api.public_routes"}
+
+
 def include_optional_router(module_name: str, label: str) -> None:
     """Include Phase routers without killing app startup if a router is absent."""
     try:
@@ -217,16 +228,6 @@ include_optional_router("api.phase4_soc", "phase4_soc")
 include_optional_router("api.signup", "legacy_signup")
 include_optional_router("api.certify", "legacy_certify")
 include_optional_router("api.billing", "legacy_billing")
-
-# ── Enterprise sub-routers (profile auth + public info) ─────────────────────
-# These routes are required in production so signup/login flows stay mounted.
-from api.profile_routes import router as profile_router  # type: ignore
-from api.public_routes import router as public_router  # type: ignore
-
-app.include_router(profile_router)
-app.include_router(public_router)
-ROUTER_STATUS["profile_routes"] = {"loaded": True, "module": "api.profile_routes"}
-ROUTER_STATUS["public_routes"] = {"loaded": True, "module": "api.public_routes"}
 
 # ── Database helpers ─────────────────────────────────────────────────────────
 
