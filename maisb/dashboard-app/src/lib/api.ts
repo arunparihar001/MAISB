@@ -3,12 +3,19 @@ import { API_BASE_URL } from './config'
 
 export type ApiError = Error & { status?: number }
 
-const NETWORK_ERROR_MESSAGE = 'Could not connect to MAISB API. This may be a CORS or API availability issue.'
+function networkErrorMessage(method: string, path: string): string {
+  return `Network/CORS failure while calling ${method} ${path} at ${API_BASE_URL}`
+}
 
 function parseErrorMessage(data: unknown, fallback: string): string {
   if (!data || typeof data !== 'object') return fallback
   const detail = (data as { detail?: unknown }).detail
   if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: unknown; message?: unknown }
+    if (typeof first.message === 'string') return first.message
+    if (typeof first.msg === 'string') return first.msg
+  }
   if (detail && typeof detail === 'object') {
     const message = (detail as { message?: unknown }).message
     if (typeof message === 'string') return message
@@ -20,14 +27,9 @@ function parseErrorMessage(data: unknown, fallback: string): string {
   return fallback
 }
 
-function normalizeFetchError(err: unknown): Error {
-  if (err instanceof Error) {
-    if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
-      return new Error(NETWORK_ERROR_MESSAGE)
-    }
-    return err
-  }
-  return new Error(NETWORK_ERROR_MESSAGE)
+function normalizeFetchError(method: string, path: string): Error {
+  const message = networkErrorMessage(method, path)
+  return new Error(message)
 }
 
 export function buildHeaders(init?: RequestInit): Headers {
@@ -53,8 +55,9 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
       ...init,
       headers: buildHeaders(init),
     })
-  } catch (err) {
-    throw normalizeFetchError(err)
+  } catch {
+    const method = (init?.method || 'GET').toUpperCase()
+    throw normalizeFetchError(method, path)
   }
 
   const raw = await response.text()
@@ -87,8 +90,8 @@ export async function apiText(path: string, init?: RequestInit): Promise<string>
       ...init,
       headers: buildHeaders(init),
     })
-  } catch (err) {
-    throw normalizeFetchError(err)
+  } catch {
+    throw normalizeFetchError('GET', path)
   }
   const raw = await response.text()
   if (!response.ok) {
@@ -100,7 +103,12 @@ export async function apiText(path: string, init?: RequestInit): Promise<string>
 }
 
 export async function downloadWithAuth(path: string, filename: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { headers: buildHeaders() })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { headers: buildHeaders() })
+  } catch {
+    throw normalizeFetchError('GET', path)
+  }
   if (!response.ok) {
     throw new Error(`Download failed with HTTP ${response.status}`)
   }

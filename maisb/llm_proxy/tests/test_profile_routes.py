@@ -67,8 +67,13 @@ def test_signup_and_email_verification_flow(monkeypatch, tmp_path):
         "password": "s3cret-pass",
     }
 
-    signup_response = client.post("/v1/profile/signup", json=signup_payload)
+    signup_response = client.post(
+        "/v1/profile/signup",
+        json=signup_payload,
+        headers={"Origin": "https://app.maisb.app"},
+    )
     assert signup_response.status_code == 200
+    assert signup_response.headers["access-control-allow-origin"] == "https://app.maisb.app"
     signup_data = signup_response.json()
     assert signup_data["status"] == "pending_verification"
     assert signup_data["email_sent"] is True

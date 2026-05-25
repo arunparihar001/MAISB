@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { apiRequest } from '../lib/api'
+import { apiRequest, type ApiError } from '../lib/api'
 import { API_BASE_URL } from '../lib/config'
 import { setStoredEmail } from '../lib/auth'
 
@@ -8,6 +8,44 @@ type SignupResponse = {
   created: boolean
   email: string
   email_sent: boolean
+}
+
+const SIGNUP_DIAGNOSTICS_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_SIGNUP_DIAGNOSTICS === 'true'
+
+async function runSignupDiagnostic() {
+  try {
+    await apiRequest('/v1/profile/signup', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    return { ok: true as const }
+  } catch (err) {
+    const apiError = err as ApiError
+    if (typeof apiError.status === 'number') {
+      if (apiError.status === 422) {
+        return { ok: true as const }
+      }
+      return {
+        ok: false as const,
+        message: `Signup API returned JSON error (${apiError.status}): ${apiError.message}`,
+      }
+    }
+    return {
+      ok: false as const,
+      message: err instanceof Error ? err.message : `Network/CORS failure while calling POST /v1/profile/signup at ${API_BASE_URL}`,
+    }
+  }
+}
+
+function formatSignupError(err: unknown): string {
+  if (err instanceof Error) {
+    const apiError = err as ApiError
+    if (typeof apiError.status === 'number') {
+      return `Signup API returned JSON error (${apiError.status}): ${err.message}`
+    }
+    return err.message
+  }
+  return `Network/CORS failure while calling POST /v1/profile/signup at ${API_BASE_URL}`
 }
 
 export default function Signup() {
@@ -45,6 +83,13 @@ export default function Signup() {
     setLoading(true)
     setError('')
     try {
+      if (SIGNUP_DIAGNOSTICS_ENABLED) {
+        const diagnostic = await runSignupDiagnostic()
+        if (!diagnostic.ok) {
+          setError(diagnostic.message)
+          return
+        }
+      }
       const data = await apiRequest<SignupResponse>('/v1/profile/signup', {
         method: 'POST',
         body: JSON.stringify(form),
@@ -52,12 +97,7 @@ export default function Signup() {
       setStoredEmail(data.email)
       setSubmitted(true)
     } catch (err) {
-      const message = (err as Error).message
-      setError(
-        message === 'Could not connect to MAISB API. This may be a CORS or API availability issue.'
-          ? `Could not connect to MAISB API at ${API_BASE_URL}`
-          : message,
-      )
+      setError(formatSignupError(err))
     } finally {
       setLoading(false)
     }

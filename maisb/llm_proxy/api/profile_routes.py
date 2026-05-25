@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import jwt
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
