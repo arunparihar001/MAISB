@@ -14,6 +14,7 @@ type Invite = { invited: boolean; email: string; role: string; invite_id: string
 export default function Team() {
   const [team, setTeam] = useState<TeamMember[]>([])
   const [comingSoon, setComingSoon] = useState(false)
+  const [tab, setTab] = useState<'members' | 'access' | 'activity'>('members')
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('viewer')
   const [activity, setActivity] = useState<Array<{ id: string; entry: string }>>([])
@@ -49,47 +50,77 @@ export default function Team() {
 
   return (
     <main className="stack">
-      <h1>Team</h1>
-      <Card title="Invite member">
-        <form onSubmit={onInvite} className="form-grid">
-          <input required type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Member email" />
-          <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
-            <option value="admin">admin</option>
-            <option value="analyst">analyst</option>
-            <option value="viewer">viewer</option>
-          </select>
-          <Button type="submit">Send invite</Button>
-        </form>
-      </Card>
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Enterprise permissions</p>
+          <h1>Team</h1>
+          <p className="muted">Invite members, review access, and audit activity.</p>
+        </div>
+        <Badge>{comingSoon ? 'Controls staged rollout' : 'Access online'}</Badge>
+      </div>
 
-      {comingSoon && (
-        <Card title="Enterprise team controls">
-          <p className="muted">Advanced role controls and provisioning workflows are coming soon for enterprise workspaces.</p>
-        </Card>
-      )}
-
-      <Card title="Members">
-        <DataTable
-          columns={[
-            { key: 'name', label: 'Name', render: (row) => row.name || row.email },
-            { key: 'email', label: 'Email', render: (row) => row.email },
-            { key: 'role', label: 'Role', render: (row) => <Badge>{row.role}</Badge> },
-            { key: 'status', label: 'Status', render: (row) => row.status },
-          ]}
-          rows={team}
-          rowKey={(row) => row.member_id}
-        />
-      </Card>
-
-      <Card title="Activity log">
-        {activity.length ? (
-          <ul className="bullet-list">
-            {activity.map((item) => (
-              <li key={item.id}>{item.entry}</li>
+      <Card
+        title="Team console"
+        actions={
+          <div className="tab-strip">
+            {(['members', 'access', 'activity'] as const).map((item) => (
+              <button key={item} type="button" className={tab === item ? 'tab active' : 'tab'} onClick={() => setTab(item)}>
+                {item}
+              </button>
             ))}
-          </ul>
-        ) : (
-          <p className="muted">No activity yet.</p>
+          </div>
+        }
+      >
+        {tab === 'members' && (
+          <div className="grid two-col">
+            <form onSubmit={onInvite} className="form-grid card-inset">
+              <h3>Invite member</h3>
+              <input required type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Member email" />
+              <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)}>
+                <option value="admin">admin</option>
+                <option value="analyst">analyst</option>
+                <option value="viewer">viewer</option>
+              </select>
+              <Button type="submit">Send invite</Button>
+            </form>
+            <div className="card-inset">
+              <p className="eyebrow">Members</p>
+              <DataTable
+                columns={[
+                  { key: 'name', label: 'Name', render: (row) => row.name || row.email },
+                  { key: 'role', label: 'Role', render: (row) => <Badge>{row.role}</Badge> },
+                  { key: 'status', label: 'Status', render: (row) => row.status },
+                ]}
+                rows={team}
+                rowKey={(row) => row.member_id}
+              />
+            </div>
+          </div>
+        )}
+
+        {tab === 'access' && (
+          <Card title="Enterprise team controls">
+            <p className="muted">Advanced role controls and provisioning workflows are coming soon for enterprise workspaces.</p>
+            <ul className="bullet-list">
+              <li>Least-privilege access reviews</li>
+              <li>Provisioning and deprovisioning records</li>
+              <li>Scoped workspace administration</li>
+            </ul>
+          </Card>
+        )}
+
+        {tab === 'activity' && (
+          <Card title="Activity log">
+            {activity.length ? (
+              <ul className="bullet-list">
+                {activity.map((item) => (
+                  <li key={item.id}>{item.entry}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">No activity yet.</p>
+            )}
+          </Card>
         )}
       </Card>
 

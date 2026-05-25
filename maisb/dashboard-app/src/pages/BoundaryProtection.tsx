@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import Badge from '../components/Badge'
 import BoundaryCard from '../components/BoundaryCard'
 import Card from '../components/Card'
 import { apiRequest } from '../lib/api'
@@ -34,10 +35,25 @@ export default function BoundaryProtection() {
 
   return (
     <main className="stack">
-      <h1>Boundary Protection</h1>
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Boundary policy</p>
+          <h1>Boundary Protection</h1>
+          <p className="muted">Channel inputs are scored before they reach the model boundary.</p>
+        </div>
+        <Badge>Sample data</Badge>
+      </div>
       <Card title="Boundary Health Score" subtitle="Composite trust across channel boundaries.">
         <div className="health-score">{boundaryHealth}%</div>
       </Card>
+      <section className="grid">
+        <Card title="Scanning posture" subtitle="Channels under continuous observation">
+          <p className="muted">Clipboard, QR, NFC, notifications, webviews, and deep links are evaluated with consistent policy controls.</p>
+        </Card>
+        <Card title="Traceability" subtitle="Every decision is auditable">
+          <p className="muted">Boundary events retain channel lineage, timestamps, and scored verdicts for downstream review.</p>
+        </Card>
+      </section>
       <section className="grid">
         {mapped.map((channel) => (
           <BoundaryCard key={channel.channel} {...channel} />

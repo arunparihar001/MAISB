@@ -51,7 +51,11 @@ export default function Analytics() {
   return (
     <main className="stack">
       <div className="page-head">
-        <h1>Analytics</h1>
+        <div>
+          <p className="eyebrow">Security analytics</p>
+          <h1>Analytics</h1>
+          <p className="muted">Gradient charts summarize boundary activity across the current window.</p>
+        </div>
         <div className="row-inline">
           <Button variant={range === 'weekly' ? 'primary' : 'secondary'} onClick={() => setRange('weekly')}>Weekly</Button>
           <Button variant={range === 'monthly' ? 'primary' : 'secondary'} onClick={() => setRange('monthly')}>Monthly</Button>

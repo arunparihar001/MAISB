@@ -47,12 +47,13 @@ export default function Login() {
 
   return (
     <main className="auth-page">
-      <form className="auth-card" onSubmit={onSubmit}>
+      <form className="auth-card glass-card" onSubmit={onSubmit}>
+        <p className="eyebrow">Authenticated access</p>
         <h1>Login</h1>
-        <p className="muted">Use your verified account credentials.</p>
+        <p className="muted">Use verified credentials to re-enter the workspace.</p>
         <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" />
         <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" />
-        <button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Login'}</button>
+        <button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Enter workspace'}</button>
         <Link to="/signup">Need an account? Sign up</Link>
         {error && <p className="error">{error}</p>}
       </form>

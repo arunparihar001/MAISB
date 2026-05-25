@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import Badge from '../components/Badge'
 import Card from '../components/Card'
 import StatCard from '../components/StatCard'
 import { apiRequest } from '../lib/api'
@@ -38,7 +39,14 @@ export default function Dashboard() {
 
   return (
     <main className="stack">
-      <h1>Overview</h1>
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Enterprise overview</p>
+          <h1>Overview</h1>
+          <p className="muted">Sample data is shown until live signals are available.</p>
+        </div>
+        <Badge>Sample data</Badge>
+      </div>
       <section className="grid">
         <StatCard label="Total Scans" value={total} />
         <StatCard label="Blocked" value={decisions.BLOCKED || 0} />
