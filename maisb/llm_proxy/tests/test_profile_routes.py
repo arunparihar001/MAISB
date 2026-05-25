@@ -146,6 +146,31 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
     assert captured["timeout"].connect == 5.0
 
 
+def test_send_resend_email_uses_bare_sender_when_already_canonical(monkeypatch, tmp_path):
+    setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, *, json=None, headers=None, timeout=None):
+        captured["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "hello@updates.maisb.app")
+
+    assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is True
+    assert captured["json"]["from"] == "hello@updates.maisb.app"
+
+
 def test_send_resend_email_records_provider_error_diagnostics(monkeypatch, tmp_path):
     setup_test_scan_app(monkeypatch, tmp_path)
     from api import profile_routes

@@ -331,6 +331,7 @@ def resend_enabled() -> bool:
 
 
 def _resend_from_address() -> str:
+    """Return the canonical bare Resend sender email address."""
     value = (RESEND_FROM or "").strip()
     if not value:
         return ""
@@ -341,6 +342,7 @@ def _resend_from_address() -> str:
 
 
 def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
+    """Return a copy of the most recent request-scoped Resend diagnostics."""
     diagnostics = _LAST_RESEND_DIAGNOSTICS.get()
     if diagnostics is None:
         return None
@@ -356,6 +358,7 @@ def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
 
 
 def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str, Any]:
+    """Extract Resend error details while tolerating malformed responses."""
     try:
         diagnostics: Dict[str, Any] = {"provider": "resend", "status_code": response.status_code}
         request_id = response.headers.get("x-request-id") or response.headers.get("x-resend-request-id")
