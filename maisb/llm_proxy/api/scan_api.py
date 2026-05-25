@@ -44,6 +44,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 
 # ── Import path safety ───────────────────────────────────────────────────────
@@ -181,9 +183,9 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:5173",
     ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 ROUTER_STATUS: Dict[str, Any] = {}
@@ -199,6 +201,66 @@ app.include_router(profile_router)
 app.include_router(public_router)
 ROUTER_STATUS["profile_routes"] = {"loaded": True, "module": "api.profile_routes"}
 ROUTER_STATUS["public_routes"] = {"loaded": True, "module": "api.public_routes"}
+
+
+_CORS_ALLOW_ORIGIN = "https://app.maisb.app"
+_CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+_CORS_ALLOW_HEADERS = "Authorization,Content-Type,Accept,Origin"
+_CORS_PREFLIGHT_PATHS = {
+    "/v1/profile/signup",
+    "/v1/profile/verify-email",
+    "/v1/profile/login",
+    "/v1/api-keys",
+}
+
+
+def cors_preflight_response() -> Response:
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": _CORS_ALLOW_ORIGIN,
+            "Access-Control-Allow-Methods": _CORS_ALLOW_METHODS,
+            "Access-Control-Allow-Headers": _CORS_ALLOW_HEADERS,
+        },
+    )
+
+
+class ExplicitCorsPreflightMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if (
+            request.method == "OPTIONS"
+            and request.url.path in _CORS_PREFLIGHT_PATHS
+            and request.headers.get("origin") == _CORS_ALLOW_ORIGIN
+            and request.headers.get("access-control-request-method")
+        ):
+            return cors_preflight_response()
+        return await call_next(request)
+
+
+app.user_middleware.insert(0, Middleware(ExplicitCorsPreflightMiddleware))
+
+
+@app.get("/v1/cors-test", tags=["System"])
+def cors_test(request: Request) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "service": "maisb-api",
+        "origin": request.headers.get("origin"),
+        "cors": "enabled",
+    }
+
+
+def options_profile_routes() -> Response:
+    return cors_preflight_response()
+
+
+for path in (
+    "/v1/profile/signup",
+    "/v1/profile/verify-email",
+    "/v1/profile/login",
+    "/v1/api-keys",
+):
+    app.add_api_route(path, options_profile_routes, methods=["OPTIONS"], include_in_schema=False)
 
 
 def include_optional_router(module_name: str, label: str) -> None:
