@@ -55,7 +55,7 @@ def test_signup_and_email_verification_flow(monkeypatch, tmp_path):
         captured["to"] = to
         captured["subject"] = subject
         captured["body"] = html_body
-        return True
+        return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
 
@@ -146,6 +146,8 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
     assert isinstance(captured["timeout"], httpx.Timeout)
     assert captured["timeout"].read == 8.0
     assert captured["timeout"].connect == 5.0
+    assert captured["timeout"].write == 8.0
+    assert captured["timeout"].pool == 8.0
 
 
 def test_send_resend_email_uses_bare_sender_when_already_canonical(monkeypatch, tmp_path):
@@ -216,7 +218,7 @@ def test_duplicate_unverified_signup_resends_verification(monkeypatch, tmp_path)
 
     def fake_send_resend_email(to, subject, html_body):
         sent_messages.append((to, subject, html_body))
-        return True
+        return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
 
@@ -279,7 +281,7 @@ def test_duplicate_verified_signup_returns_conflict(monkeypatch, tmp_path):
 
     def fake_send_resend_email(to, subject, html_body):
         sent_messages.append((to, subject, html_body))
-        return True
+        return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
 

@@ -364,7 +364,7 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
             for key in ("error", "name", "message", "code"):
                 value = body.get(key)
                 if isinstance(value, str) and value.strip():
-                    diagnostics[key] = value.strip()[:MAX_DIAGNOSTIC_MESSAGE_LENGTH]
+                    diagnostics[key] = value.strip() if key in {"error", "name", "code"} else value.strip()[:MAX_DIAGNOSTIC_MESSAGE_LENGTH]
         else:
             text = response.text.strip()
             if text:
@@ -435,10 +435,7 @@ def send_verification_email(email: str, raw_token: str) -> Tuple[bool, Optional[
         "<p>This token expires in 24 hours and can only be used once.</p>"
         f"<p><a href='{html.escape(APP_DASHBOARD_URL)}'>Open dashboard</a></p>"
     )
-    result = send_resend_email(email, "Verify your MAISB account", body)
-    if isinstance(result, tuple):
-        return result
-    return result, None
+    return send_resend_email(email, "Verify your MAISB account", body)
 
 
 def safe_log_activity(profile_id: str, action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
@@ -697,7 +694,7 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
                 "error": "signup_failed",
                 "message": "Signup could not be completed.",
             },
-        ) from exc
+        )
     finally:
         conn.close()
 
