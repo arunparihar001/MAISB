@@ -337,7 +337,10 @@ def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
 
 
 def _set_last_resend_diagnostics(diagnostics: Optional[Dict[str, Any]]) -> None:
-    _LAST_RESEND_DIAGNOSTICS.set(dict(diagnostics) if diagnostics else None)
+    if diagnostics is None:
+        _LAST_RESEND_DIAGNOSTICS.set(None)
+    else:
+        _LAST_RESEND_DIAGNOSTICS.set(dict(diagnostics))
 
 
 def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str, Any]:
@@ -365,6 +368,7 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
 
 
 def send_resend_email(to: str, subject: str, html_body: str) -> bool:
+    # Reset request-scoped diagnostics before each send attempt.
     _set_last_resend_diagnostics(None)
     if not resend_enabled() or not to:
         return False
