@@ -283,7 +283,7 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
 
 
 def send_verification_email(email: str, raw_token: str) -> bool:
-    verify_url = "https://app.maisb.app/verify-email"
+    verify_url = f"{APP_DASHBOARD_URL.rstrip('/')}/verify-email"
     body = (
         "<p>Thanks for signing up for MAISB.</p>"
         f"<p><a href='{html.escape(verify_url)}'>Verify your email</a></p>"
