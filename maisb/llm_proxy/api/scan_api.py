@@ -176,21 +176,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://maisb.app",
-        "https://www.maisb.app",
         "https://app.maisb.app",
-        "https://api.maisb.app",
-        "https://maisb-dashboard-static.vercel.app",  # legacy Vercel dashboard fallback
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:3000",
+        "https://www.maisb.app",
         "http://127.0.0.1:5173",
-        "http://127.0.0.1:8000",
+        "http://localhost:5173",
     ],
-    allow_origin_regex=os.environ.get("CORS_ALLOW_ORIGIN_REGEX", r"https://.*\.vercel\.app"),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
 )
 
 ROUTER_STATUS: Dict[str, Any] = {}
