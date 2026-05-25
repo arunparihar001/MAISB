@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { apiRequest } from '../lib/api'
+import { apiRequest, type ApiError } from '../lib/api'
 import { API_BASE_URL } from '../lib/config'
 import { setStoredEmail } from '../lib/auth'
 
@@ -10,12 +10,47 @@ type SignupResponse = {
   email_sent: boolean
 }
 
+type SignupDiagnosticResult = { ok: true } | { ok: false; message: string }
+
+const SIGNUP_DIAGNOSTICS_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_SIGNUP_DIAGNOSTICS === 'true'
+
+async function runSignupDiagnostic(): Promise<SignupDiagnosticResult> {
+  try {
+    await apiRequest('/v1/profile/signup', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    return { ok: true }
+  } catch (err) {
+    const apiError = err as ApiError
+    if (typeof apiError.status === 'number') {
+      if (apiError.status === 422) {
+        return { ok: true }
+      }
+      return { ok: false, message: formatSignupError(apiError) }
+    }
+    return { ok: false, message: formatSignupError(err) }
+  }
+}
+
+function formatSignupError(err: unknown): string {
+  if (err instanceof Error) {
+    const apiError = err as ApiError
+    if (typeof apiError.status === 'number') {
+      return `Signup API returned JSON error (${apiError.status}): ${err.message}`
+    }
+    return err.message
+  }
+  return `Network/CORS failure while calling POST /v1/profile/signup at ${API_BASE_URL}`
+}
+
 export default function Signup() {
   const [form, setForm] = useState({ name: '', email: '', company: '', use_case: '', password: '' })
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [apiStatus, setApiStatus] = useState<'checking' | 'online' | 'blocked'>('checking')
+  const diagnosticAttemptRef = useRef<Promise<SignupDiagnosticResult> | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -45,6 +80,18 @@ export default function Signup() {
     setLoading(true)
     setError('')
     try {
+      if (SIGNUP_DIAGNOSTICS_ENABLED) {
+        if (!diagnosticAttemptRef.current) {
+          diagnosticAttemptRef.current = runSignupDiagnostic()
+        }
+        const diagnostic = await diagnosticAttemptRef.current
+        if (!diagnostic.ok) {
+          setError(diagnostic.message)
+          diagnosticAttemptRef.current = null
+          setLoading(false)
+          return
+        }
+      }
       const data = await apiRequest<SignupResponse>('/v1/profile/signup', {
         method: 'POST',
         body: JSON.stringify(form),
@@ -52,12 +99,7 @@ export default function Signup() {
       setStoredEmail(data.email)
       setSubmitted(true)
     } catch (err) {
-      const message = (err as Error).message
-      setError(
-        message === 'Could not connect to MAISB API. This may be a CORS or API availability issue.'
-          ? `Could not connect to MAISB API at ${API_BASE_URL}`
-          : message,
-      )
+      setError(formatSignupError(err))
     } finally {
       setLoading(false)
     }
