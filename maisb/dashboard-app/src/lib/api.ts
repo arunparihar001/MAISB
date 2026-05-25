@@ -3,6 +3,8 @@ import { API_BASE_URL } from './config'
 
 export type ApiError = Error & { status?: number }
 
+const NETWORK_ERROR_MESSAGE = 'Could not connect to MAISB API. This may be a CORS or API availability issue.'
+
 function parseErrorMessage(data: unknown, fallback: string): string {
   if (!data || typeof data !== 'object') return fallback
   const detail = (data as { detail?: unknown }).detail
@@ -16,6 +18,16 @@ function parseErrorMessage(data: unknown, fallback: string): string {
   const error = (data as { error?: unknown }).error
   if (typeof error === 'string') return error
   return fallback
+}
+
+function normalizeFetchError(err: unknown): Error {
+  if (err instanceof Error) {
+    if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+      return new Error(NETWORK_ERROR_MESSAGE)
+    }
+    return err
+  }
+  return new Error(NETWORK_ERROR_MESSAGE)
 }
 
 export function buildHeaders(init?: RequestInit): Headers {
@@ -35,10 +47,15 @@ export function buildHeaders(init?: RequestInit): Headers {
 }
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: buildHeaders(init),
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: buildHeaders(init),
+    })
+  } catch (err) {
+    throw normalizeFetchError(err)
+  }
 
   const raw = await response.text()
   let data: unknown = null
@@ -64,10 +81,15 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
 }
 
 export async function apiText(path: string, init?: RequestInit): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: buildHeaders(init),
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers: buildHeaders(init),
+    })
+  } catch (err) {
+    throw normalizeFetchError(err)
+  }
   const raw = await response.text()
   if (!response.ok) {
     const err = new Error(raw || `Request failed with HTTP ${response.status}`) as ApiError

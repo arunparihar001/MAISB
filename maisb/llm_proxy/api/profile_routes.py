@@ -283,7 +283,7 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
 
 
 def send_verification_email(email: str, raw_token: str) -> bool:
-    verify_url = f"{APP_DASHBOARD_URL.rstrip('/')}/verify-email"
+    verify_url = "https://app.maisb.app/verify-email"
     body = (
         "<p>Thanks for signing up for MAISB.</p>"
         f"<p><a href='{html.escape(verify_url)}'>Verify your email</a></p>"
@@ -478,6 +478,18 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
     conn.close()
 
     email_sent = send_verification_email(email, raw_token)
+    if resend_enabled() and not email_sent:
+        log_activity(profile_id, "profile_signup_email_failed", {"email": email, "email_sent": email_sent})
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "verification_email_failed",
+                "message": "Verification email could not be sent. Please try again later.",
+                "profile_id": profile_id,
+                "email": email,
+            },
+        )
+
     response: Dict[str, Any] = {
         "created": True,
         "status": "pending_verification",
