@@ -668,7 +668,7 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
 
     email_sent = send_verification_email(email, raw_token)
     if resend_enabled() and not email_sent:
-        diagnostics = get_last_resend_diagnostics() or {"provider": "resend", "status": "failed"}
+        diagnostics = get_last_resend_diagnostics() or {"provider": "resend", "error": "failed"}
         safe_log_activity(
             profile_id,
             "profile_signup_email_failed",

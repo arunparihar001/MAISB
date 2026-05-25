@@ -137,6 +137,7 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
         "reply_to": "sales@maisb.app",
     }
     assert isinstance(captured["timeout"], httpx.Timeout)
+    assert captured["timeout"].read == 8.0
     assert captured["timeout"].connect == 5.0
 
 
