@@ -177,9 +177,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://maisb.app",
         "https://app.maisb.app",
         "https://www.maisb.app",
-        "https://maisb.app",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
     ],
@@ -250,24 +250,17 @@ def cors_test(request: Request) -> Dict[str, Any]:
     }
 
 
-@app.options("/v1/profile/signup", tags=["System"])
-def options_profile_signup() -> Response:
+def options_profile_routes() -> Response:
     return cors_preflight_response()
 
 
-@app.options("/v1/profile/verify-email", tags=["System"])
-def options_profile_verify_email() -> Response:
-    return cors_preflight_response()
-
-
-@app.options("/v1/profile/login", tags=["System"])
-def options_profile_login() -> Response:
-    return cors_preflight_response()
-
-
-@app.options("/v1/api-keys", tags=["System"])
-def options_api_keys() -> Response:
-    return cors_preflight_response()
+for path in (
+    "/v1/profile/signup",
+    "/v1/profile/verify-email",
+    "/v1/profile/login",
+    "/v1/api-keys",
+):
+    app.add_api_route(path, options_profile_routes, methods=["OPTIONS"], include_in_schema=False)
 
 
 def include_optional_router(module_name: str, label: str) -> None:

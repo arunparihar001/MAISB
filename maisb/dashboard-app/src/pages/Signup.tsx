@@ -80,7 +80,9 @@ export default function Signup() {
       <form className="auth-card wide" onSubmit={onSubmit}>
         <h1>Create account</h1>
         <p className="muted">Enterprise workspace onboarding starts with email verification.</p>
-        <p className="muted">API base: {API_BASE_URL} · API status: {apiStatus === 'online' ? 'Online' : apiStatus === 'blocked' ? 'API blocked or unreachable' : 'Checking…'}</p>
+        <p className="muted" aria-live="polite" role="status">
+          API base: {API_BASE_URL} · API status: {apiStatus === 'online' ? 'Online' : apiStatus === 'blocked' ? 'API blocked or unreachable' : 'Checking…'}
+        </p>
         <div className="form-grid">
           <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" />
           <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" />
