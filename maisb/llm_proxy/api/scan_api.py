@@ -256,7 +256,7 @@ def cors_test(request: Request) -> Dict[str, Any]:
 
 
 @app.options("/{rest_of_path:path}", include_in_schema=False)
-def cors_fallback_options(request: Request, _rest_of_path: str) -> Response:
+def cors_fallback_options(request: Request, rest_of_path: str) -> Response:
     return cors_preflight_response(request.headers.get("origin"))
 
 

@@ -27,15 +27,9 @@ async function runSignupDiagnostic(): Promise<SignupDiagnosticResult> {
       if (apiError.status === 422) {
         return { ok: true }
       }
-      return {
-        ok: false,
-        message: `Signup API returned JSON error (${apiError.status}): ${apiError.message}`,
-      }
+      return { ok: false, message: formatSignupError(apiError) }
     }
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : `Network/CORS failure while calling POST /v1/profile/signup at ${API_BASE_URL}`,
-    }
+    return { ok: false, message: formatSignupError(err) }
   }
 }
 
@@ -93,6 +87,7 @@ export default function Signup() {
         const diagnostic = await diagnosticAttemptRef.current
         if (!diagnostic.ok) {
           setError(diagnostic.message)
+          diagnosticAttemptRef.current = null
           setLoading(false)
           return
         }
