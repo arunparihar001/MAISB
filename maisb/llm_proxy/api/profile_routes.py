@@ -34,7 +34,7 @@ for p in (str(LLM_PROXY_DIR), str(MAISB_DIR), str(REPO_ROOT)):
 
 DB_PATH = os.environ.get("DB_PATH", "usage.db")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM = os.environ.get("RESEND_FROM") or os.environ.get("RESEND_FROM_EMAIL") or "MAISB <hello@updates.maisb.app>"
+RESEND_FROM = os.environ.get("RESEND_FROM") or os.environ.get("RESEND_FROM_EMAIL") or "hello@updates.maisb.app"
 RESEND_REPLY_TO = os.environ.get("RESEND_REPLY_TO", "")
 APP_DASHBOARD_URL = os.environ.get("APP_DASHBOARD_URL", "https://app.maisb.app")
 SESSION_SECRET = (
@@ -327,7 +327,17 @@ init_profile_db()
 
 
 def resend_enabled() -> bool:
-    return bool(RESEND_API_KEY and RESEND_FROM)
+    return bool(RESEND_API_KEY and _resend_from_address())
+
+
+def _resend_from_address() -> str:
+    value = (RESEND_FROM or "").strip()
+    if not value:
+        return ""
+    match = re.search(r"<\s*([^<>@\s]+@[^<>]+)\s*>", value)
+    if match:
+        return match.group(1).strip()
+    return value
 
 
 def get_last_resend_diagnostics() -> Optional[Dict[str, Any]]:
@@ -357,6 +367,8 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
         except ValueError:
             body = None
 
+        if body is not None:
+            diagnostics["provider_error"] = body
         if isinstance(body, dict):
             for key in ("error", "name", "message", "code"):
                 value = body.get(key)
@@ -365,6 +377,7 @@ def _safe_resend_diagnostics_from_response(response: httpx.Response) -> Dict[str
         else:
             text = response.text.strip()
             if text:
+                diagnostics["provider_error"] = text
                 diagnostics["message"] = text[:MAX_DIAGNOSTIC_MESSAGE_LENGTH]
 
         return diagnostics
@@ -381,8 +394,9 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
     _set_last_resend_diagnostics(None)
     if not resend_enabled() or not to:
         return False
+    from_address = _resend_from_address()
     payload: Dict[str, Any] = {
-        "from": RESEND_FROM,
+        "from": from_address,
         "to": [to],
         "subject": subject,
         "html": html_body,
@@ -393,7 +407,12 @@ def send_resend_email(to: str, subject: str, html_body: str) -> bool:
         response = httpx.post(
             "https://api.resend.com/emails",
             json=payload,
-            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "MAISB/1.0",
+            },
             timeout=httpx.Timeout(8.0, connect=5.0),
         )
         response.raise_for_status()

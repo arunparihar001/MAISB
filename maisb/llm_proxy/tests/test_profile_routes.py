@@ -128,9 +128,14 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
 
     assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is True
     assert captured["url"] == "https://api.resend.com/emails"
-    assert captured["headers"] == {"Authorization": "Bearer test-key"}
+    assert captured["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "MAISB/1.0",
+    }
     assert captured["json"] == {
-        "from": "MAISB <hello@updates.maisb.app>",
+        "from": "hello@updates.maisb.app",
         "to": ["ada@example.com"],
         "subject": "Verify",
         "html": "<p>Body</p>",
@@ -141,24 +146,37 @@ def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
     assert captured["timeout"].connect == 5.0
 
 
-def test_send_resend_email_records_timeout_diagnostics(monkeypatch, tmp_path):
+def test_send_resend_email_records_provider_error_diagnostics(monkeypatch, tmp_path):
     setup_test_scan_app(monkeypatch, tmp_path)
     from api import profile_routes
 
     request = httpx.Request("POST", "https://api.resend.com/emails")
+    response = httpx.Response(
+        403,
+        request=request,
+        json={
+            "error": "forbidden",
+            "message": "Sender domain is not verified for this workspace.",
+        },
+    )
 
     def fake_post(*args, **kwargs):
-        raise httpx.ReadTimeout("timed out", request=request)
+        raise httpx.HTTPStatusError("Forbidden", request=request, response=response)
 
     monkeypatch.setattr(httpx, "post", fake_post)
     monkeypatch.setattr(profile_routes, "RESEND_API_KEY", "test-key")
-    monkeypatch.setattr(profile_routes, "RESEND_FROM", "MAISB <hello@updates.maisb.app>")
+    monkeypatch.setattr(profile_routes, "RESEND_FROM", "hello@updates.maisb.app")
 
     assert profile_routes.send_resend_email("ada@example.com", "Verify", "<p>Body</p>") is False
     assert profile_routes.get_last_resend_diagnostics() == {
         "provider": "resend",
-        "error": "request_error",
-        "message": "timed out",
+        "status_code": 403,
+        "provider_error": {
+            "error": "forbidden",
+            "message": "Sender domain is not verified for this workspace.",
+        },
+        "error": "forbidden",
+        "message": "Sender domain is not verified for this workspace.",
     }
 
 
@@ -331,7 +349,11 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
             "provider": "resend",
             "status_code": 403,
             "error": "forbidden",
-            "message": "Forbidden",
+            "provider_error": {
+                "error": "forbidden",
+                "message": "Sender domain is not verified for this workspace.",
+            },
+            "message": "Sender domain is not verified for this workspace.",
         },
     )
 
@@ -353,5 +375,9 @@ def test_signup_returns_json_error_when_email_delivery_fails(monkeypatch, tmp_pa
         "provider": "resend",
         "status_code": 403,
         "error": "forbidden",
-        "message": "Forbidden",
+        "provider_error": {
+            "error": "forbidden",
+            "message": "Sender domain is not verified for this workspace.",
+        },
+        "message": "Sender domain is not verified for this workspace.",
     }
