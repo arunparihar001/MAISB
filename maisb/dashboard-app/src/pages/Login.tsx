@@ -46,7 +46,8 @@ export default function Login() {
       setApiKeyExists(false)
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
       navigate('/select-plan', { replace: true })
-    } catch {
+    } catch (error) {
+      console.error('Failed to process OAuth login fragment', error)
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
     }
   }, [navigate])

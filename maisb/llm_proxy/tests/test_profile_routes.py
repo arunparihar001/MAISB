@@ -212,8 +212,8 @@ def test_forgot_password_and_reset_flow(monkeypatch, tmp_path):
             "payload": "Allow this message",
             "channel": "clipboard",
             "objective": "regression",
-            "api_key": "maisb_live_test123",
         },
+        headers={"Authorization": "Bearer " + raw_api_key},
     )
     assert scan_response.status_code == 200
     assert scan_response.json()["decision"] == "ALLOWED"

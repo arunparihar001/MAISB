@@ -45,7 +45,13 @@ SESSION_SECRET = (
     or os.environ.get("ADMIN_KEY")
     or "dev_only_session_secret"
 )
-SESSION_SIGNING_KEY = hashlib.sha256(SESSION_SECRET.encode("utf-8")).digest()
+SESSION_SIGNING_KEY = hashlib.pbkdf2_hmac(
+    "sha256",
+    SESSION_SECRET.encode("utf-8"),
+    b"MAISB session signing",
+    100000,
+    dklen=32,
+)
 SESSION_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS", "12"))
 TOKEN_EXPIRY_HOURS = 24
 PASSWORD_RESET_TTL_MINUTES = 45
@@ -756,7 +762,7 @@ def oauth_start_response(provider: str) -> Any:
     response = RedirectResponse(url=url, status_code=302)
     response.set_cookie(
         oauth_state_cookie_name(provider),
-        state,
+        sha256(state),
         httponly=True,
         secure=is_production_env(),
         samesite="lax",
@@ -1112,7 +1118,7 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
             raw_token = secrets.token_urlsafe(32)
             token_hash = sha256(raw_token)
             now = utcnow()
-            expires_at = (dt.datetime.utcnow() + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
+            expires_at = (dt.datetime.fromisoformat(now) + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
             reset_id = f"reset_{secrets.token_hex(10)}"
             try:
                 conn.execute(
@@ -1293,7 +1299,7 @@ def oauth_callback_route(provider: str, code: str, state: str, cookie_state: str
 
     if not code or not state or not cookie_state:
         raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state validation failed"})
-    if state != cookie_state:
+    if sha256(state) != cookie_state:
         raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state validation failed"})
     decode_oauth_state(provider, state)
 
