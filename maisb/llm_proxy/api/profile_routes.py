@@ -15,11 +15,12 @@ import sys
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.parse
 
 import httpx
 import jwt
-from fastapi import APIRouter, Header, HTTPException, Query
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
@@ -44,8 +45,11 @@ SESSION_SECRET = (
     or os.environ.get("ADMIN_KEY")
     or "dev_only_session_secret"
 )
+SESSION_SIGNING_KEY = hashlib.sha256(SESSION_SECRET.encode("utf-8")).digest()
 SESSION_TTL_HOURS = int(os.environ.get("SESSION_TTL_HOURS", "12"))
 TOKEN_EXPIRY_HOURS = 24
+PASSWORD_RESET_TTL_MINUTES = 45
+OAUTH_STATE_TTL_MINUTES = 10
 
 LOGGER = logging.getLogger(__name__)
 PASSWORD_CTX = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
@@ -55,6 +59,12 @@ RESEND_CONNECT_TIMEOUT = 5.0
 RESEND_READ_TIMEOUT = 8.0
 RESEND_WRITE_TIMEOUT = 8.0
 RESEND_POOL_TIMEOUT = 8.0
+OAUTH_COOKIE_PREFIX = "maisb_oauth_state"
+AUTH_PROVIDER_LABELS = {
+    "google": "Google Workspace",
+    "microsoft": "Microsoft Entra ID",
+    "okta": "Okta / OIDC",
+}
 
 router = APIRouter(tags=["SaaS"])
 
@@ -171,6 +181,52 @@ def init_profile_db() -> None:
         "created_at": "created_at TEXT",
     }.items():
         add_column_if_missing(conn, "email_verifications", col, ddl)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id         TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at    TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    for col, ddl in {
+        "id": "id TEXT",
+        "profile_id": "profile_id TEXT",
+        "token_hash": "token_hash TEXT",
+        "expires_at": "expires_at TEXT",
+        "used_at": "used_at TEXT",
+        "created_at": "created_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "password_resets", col, ddl)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profile_identities (
+            id                TEXT PRIMARY KEY,
+            profile_id        TEXT NOT NULL,
+            provider          TEXT NOT NULL,
+            provider_subject  TEXT NOT NULL,
+            email             TEXT,
+            created_at        TEXT NOT NULL,
+            last_login_at     TEXT NOT NULL
+        )
+        """
+    )
+    for col, ddl in {
+        "id": "id TEXT",
+        "profile_id": "profile_id TEXT",
+        "provider": "provider TEXT",
+        "provider_subject": "provider_subject TEXT",
+        "email": "email TEXT",
+        "created_at": "created_at TEXT",
+        "last_login_at": "last_login_at TEXT",
+    }.items():
+        add_column_if_missing(conn, "profile_identities", col, ddl)
 
     conn.execute(
         """
@@ -315,6 +371,10 @@ def init_profile_db() -> None:
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(lower(email))")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_token ON email_verifications(token_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token_hash)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_identities_provider_subject ON profile_identities(provider, provider_subject)"
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_profile_status ON api_keys(profile_id, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_events_profile_created ON scan_events(profile_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_profile ON cross_channel_traces(profile_id, updated_at)")
@@ -438,6 +498,274 @@ def send_verification_email(email: str, raw_token: str) -> Tuple[bool, Optional[
     return send_resend_email(email, "Verify your MAISB account", body)
 
 
+def send_password_reset_email(email: str, raw_token: str, expires_at: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    reset_url = f"{APP_DASHBOARD_URL.rstrip('/')}/reset-password?token={urllib.parse.quote(raw_token)}"
+    body = (
+        "<p>We received a request to reset your MAISB password.</p>"
+        f"<p><a href='{html.escape(reset_url)}'>Reset your password</a></p>"
+        "<p>Or paste this token into the reset form:</p>"
+        f"<pre>{html.escape(raw_token)}</pre>"
+        f"<p>This token expires at {html.escape(expires_at)} and can only be used once.</p>"
+        "<p>If you did not request this, ignore this email.</p>"
+    )
+    return send_resend_email(email, "Reset your MAISB password", body)
+
+
+def provider_settings(provider: str) -> Dict[str, Any]:
+    provider = provider.lower()
+    if provider == "google":
+        client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+        redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "")
+        return {
+            "provider": provider,
+            "label": AUTH_PROVIDER_LABELS[provider],
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_url": "https://oauth2.googleapis.com/token",
+            "issuer": "https://accounts.google.com",
+            "user_info_url": "https://openidconnect.googleapis.com/v1/userinfo",
+            "configured": bool(client_id and client_secret and redirect_uri),
+        }
+    if provider == "microsoft":
+        client_id = os.environ.get("MICROSOFT_CLIENT_ID", "")
+        client_secret = os.environ.get("MICROSOFT_CLIENT_SECRET", "")
+        tenant_id = os.environ.get("MICROSOFT_TENANT_ID", "")
+        redirect_uri = os.environ.get("MICROSOFT_REDIRECT_URI", "")
+        tenant_prefix = tenant_id or "common"
+        issuer = f"https://login.microsoftonline.com/{tenant_prefix}/v2.0"
+        return {
+            "provider": provider,
+            "label": AUTH_PROVIDER_LABELS[provider],
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "authorize_url": f"https://login.microsoftonline.com/{tenant_prefix}/oauth2/v2.0/authorize",
+            "token_url": f"https://login.microsoftonline.com/{tenant_prefix}/oauth2/v2.0/token",
+            "issuer": issuer,
+            "user_info_url": "https://graph.microsoft.com/oidc/userinfo",
+            "configured": bool(client_id and client_secret and tenant_id and redirect_uri),
+        }
+    if provider == "okta":
+        client_id = os.environ.get("OKTA_CLIENT_ID", "")
+        client_secret = os.environ.get("OKTA_CLIENT_SECRET", "")
+        issuer = os.environ.get("OKTA_ISSUER", "").rstrip("/")
+        redirect_uri = os.environ.get("OKTA_REDIRECT_URI", "")
+        return {
+            "provider": provider,
+            "label": AUTH_PROVIDER_LABELS[provider],
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "authorize_url": f"{issuer}/v1/authorize" if issuer else "",
+            "token_url": f"{issuer}/v1/token" if issuer else "",
+            "issuer": issuer,
+            "user_info_url": f"{issuer}/v1/userinfo" if issuer else "",
+            "configured": bool(client_id and client_secret and issuer and redirect_uri),
+        }
+    raise HTTPException(status_code=404, detail={"error": "not_found", "message": "Unknown auth provider"})
+
+
+def provider_overview(provider: str) -> Dict[str, Any]:
+    settings = provider_settings(provider)
+    return {"enabled": True, "configured": bool(settings["configured"]), "label": settings["label"]}
+
+
+def oauth_state_cookie_name(provider: str) -> str:
+    return f"{OAUTH_COOKIE_PREFIX}_{provider}"
+
+
+def create_oauth_state(provider: str) -> str:
+    now = dt.datetime.utcnow()
+    payload = {
+        "typ": "oauth_state",
+        "provider": provider,
+        "nonce": secrets.token_urlsafe(16),
+        "iat": int(now.timestamp()),
+        "exp": int((now + dt.timedelta(minutes=OAUTH_STATE_TTL_MINUTES)).timestamp()),
+    }
+    return jwt.encode(payload, SESSION_SIGNING_KEY, algorithm="HS256")
+
+
+def decode_oauth_state(provider: str, state: str) -> Dict[str, Any]:
+    payload = jwt.decode(state, SESSION_SIGNING_KEY, algorithms=["HS256"])
+    if payload.get("typ") != "oauth_state" or payload.get("provider") != provider:
+        raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state is invalid"})
+    return payload
+
+
+def boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def oauth_claims_from_token(provider: str, settings: Dict[str, Any], token_data: Dict[str, Any]) -> Dict[str, Any]:
+    id_token = token_data.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=400, detail={"error": "oauth_profile_missing", "message": "OAuth provider did not return an identity token"})
+
+    discovery = httpx.get(
+        f"{settings['issuer'].rstrip('/')}/.well-known/openid-configuration",
+        timeout=httpx.Timeout(connect=RESEND_CONNECT_TIMEOUT, read=RESEND_READ_TIMEOUT),
+    )
+    discovery.raise_for_status()
+    discovery_data = discovery.json()
+    jwks_uri = discovery_data.get("jwks_uri")
+    issuer = discovery_data.get("issuer") or settings["issuer"]
+    if not jwks_uri:
+        raise HTTPException(status_code=502, detail={"error": "oauth_config_error", "message": "Provider discovery is incomplete"})
+
+    signing_key = jwt.PyJWKClient(jwks_uri).get_signing_key_from_jwt(id_token).key
+    return jwt.decode(
+        id_token,
+        signing_key,
+        algorithms=["RS256", "ES256", "PS256"],
+        audience=settings["client_id"],
+        issuer=issuer,
+    )
+
+
+def oauth_profile_from_claims(provider: str, claims: Dict[str, Any]) -> Tuple[str, str, bool]:
+    email = str(
+        claims.get("email")
+        or claims.get("preferred_username")
+        or claims.get("upn")
+        or claims.get("unique_name")
+        or ""
+    ).strip().lower()
+    if not email or not is_valid_email(email):
+        raise HTTPException(status_code=400, detail={"error": "oauth_email_missing", "message": "Provider did not return a valid email address"})
+    name = str(claims.get("name") or claims.get("given_name") or email.split("@", 1)[0]).strip() or email
+    verified = boolish(claims.get("email_verified"))
+    if provider == "microsoft" and email:
+        verified = True
+    return email, name, verified
+
+
+def upsert_oauth_profile(provider: str, subject: str, email: str, name: str, verified: bool) -> sqlite3.Row:
+    conn = get_conn()
+    now = utcnow()
+    profile = None
+    identity = conn.execute(
+        "SELECT * FROM profile_identities WHERE provider=? AND provider_subject=?",
+        (provider, subject),
+    ).fetchone()
+
+    try:
+        if identity:
+            profile = conn.execute("SELECT * FROM profiles WHERE id=?", (identity["profile_id"],)).fetchone()
+            if profile:
+                updates: List[str] = []
+                params: List[Any] = []
+                if name and (not profile["name"] or not str(profile["name"]).strip()):
+                    updates.append("name=?")
+                    params.append(name)
+                if verified and not profile["verified"]:
+                    updates.append("verified=1")
+                updates.append("updated_at=?")
+                params.append(now)
+                params.append(profile["id"])
+                conn.execute(f"UPDATE profiles SET {', '.join(updates)} WHERE id=?", tuple(params))
+                conn.execute(
+                    "UPDATE profile_identities SET email=?, last_login_at=? WHERE provider=? AND provider_subject=?",
+                    (email, now, provider, subject),
+                )
+                conn.commit()
+                profile = conn.execute("SELECT * FROM profiles WHERE id=?", (profile["id"],)).fetchone()
+                return profile  # type: ignore[return-value]
+
+        profile = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+        if profile:
+            updates = ["updated_at=?"]
+            params = [now]
+            if verified and not profile["verified"]:
+                updates.insert(0, "verified=1")
+            if name and (not profile["name"] or not str(profile["name"]).strip()):
+                updates.insert(0, "name=?")
+                params.insert(0, name)
+            params.append(profile["id"])
+            conn.execute(f"UPDATE profiles SET {', '.join(updates)} WHERE id=?", tuple(params))
+            profile = conn.execute("SELECT * FROM profiles WHERE id=?", (profile["id"],)).fetchone()
+        else:
+            profile_id = f"prof_{secrets.token_hex(8)}"
+            conn.execute(
+                "INSERT INTO profiles (id, name, email, company, use_case, password_hash, verified, plan, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, NULL, ?, 'free', ?, ?)",
+                (
+                    profile_id,
+                    name,
+                    email,
+                    "Android / AI agent runtime protection",
+                    1 if verified else 0,
+                    now,
+                    now,
+                ),
+            )
+            profile = conn.execute("SELECT * FROM profiles WHERE id=?", (profile_id,)).fetchone()
+
+        identity_id = f"ident_{secrets.token_hex(8)}"
+        conn.execute(
+            """
+            INSERT INTO profile_identities (id, profile_id, provider, provider_subject, email, created_at, last_login_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider, provider_subject) DO UPDATE SET
+                profile_id=excluded.profile_id,
+                email=excluded.email,
+                last_login_at=excluded.last_login_at
+            """,
+            (identity_id, profile["id"], provider, subject, email, now, now),
+        )
+        conn.commit()
+        refreshed = conn.execute("SELECT * FROM profiles WHERE id=?", (profile["id"],)).fetchone()
+        return refreshed  # type: ignore[return-value]
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def oauth_start_response(provider: str) -> Any:
+    settings = provider_settings(provider)
+    if not settings["configured"]:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "provider": provider,
+                "configured": False,
+                "message": f"{settings['label']} is not configured yet.",
+            },
+        )
+
+    state = create_oauth_state(provider)
+    params = {
+        "client_id": settings["client_id"],
+        "response_type": "code",
+        "redirect_uri": settings["redirect_uri"],
+        "scope": "openid email profile",
+        "state": state,
+    }
+    if provider == "microsoft":
+        params["prompt"] = "select_account"
+    url = f"{settings['authorize_url']}?{urllib.parse.urlencode(params)}"
+    response = RedirectResponse(url=url, status_code=302)
+    response.set_cookie(
+        oauth_state_cookie_name(provider),
+        state,
+        httponly=True,
+        secure=is_production_env(),
+        samesite="lax",
+        max_age=OAUTH_STATE_TTL_MINUTES * 60,
+        path="/",
+    )
+    return response
+
+
 def safe_log_activity(profile_id: str, action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
     try:
         log_activity(profile_id, action, metadata)
@@ -485,7 +813,7 @@ def create_session_token(profile_id: str, email: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + dt.timedelta(hours=SESSION_TTL_HOURS)).timestamp()),
     }
-    return jwt.encode(payload, SESSION_SECRET, algorithm="HS256")
+    return jwt.encode(payload, SESSION_SIGNING_KEY, algorithm="HS256")
 
 
 def resolve_profile_from_bearer(authorization: Optional[str], allow_api_key: bool) -> Tuple[sqlite3.Row, str]:
@@ -496,7 +824,7 @@ def resolve_profile_from_bearer(authorization: Optional[str], allow_api_key: boo
     conn = get_conn()
 
     try:
-        payload = jwt.decode(token, SESSION_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(token, SESSION_SIGNING_KEY, algorithms=["HS256"])
         if payload.get("typ") == "session" and payload.get("sub"):
             row = conn.execute("SELECT * FROM profiles WHERE id=?", (payload["sub"],)).fetchone()
             if row and row["verified"]:
@@ -566,6 +894,16 @@ class VerifyEmailRequest(BaseModel):
 class ProfileLoginRequest(BaseModel):
     email: str
     password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8)
+    confirm_password: str
 
 
 class PlanSelectRequest(BaseModel):
@@ -764,6 +1102,90 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
     return {"verified": True, "email": email_row["email"] if email_row else None}
 
 
+@router.post("/v1/profile/forgot-password")
+def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
+    email = body.email.strip().lower()
+    if is_valid_email(email):
+        conn = get_conn()
+        profile = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
+        if profile:
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = sha256(raw_token)
+            now = utcnow()
+            expires_at = (dt.datetime.utcnow() + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
+            reset_id = f"reset_{secrets.token_hex(10)}"
+            try:
+                conn.execute(
+                    "INSERT INTO password_resets (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+                    (reset_id, profile["id"], token_hash, expires_at, now),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                LOGGER.exception("Password reset request failed")
+            finally:
+                conn.close()
+            email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
+            if resend_enabled() and not email_sent:
+                safe_log_activity(
+                    profile["id"],
+                    "password_reset_email_failed",
+                    {"email": email, "diagnostics": diagnostics},
+                )
+        else:
+            conn.close()
+    return {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+
+
+@router.post("/v1/profile/reset-password")
+def profile_reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
+    if body.password != body.confirm_password:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "validation_error", "message": "Password and confirm password must match"},
+        )
+
+    token = body.token.strip()
+    if not token:
+        raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Token is required"})
+
+    token_hash = sha256(token)
+    now = dt.datetime.utcnow().isoformat()
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM password_resets WHERE token_hash=? AND used_at IS NULL ORDER BY created_at DESC LIMIT 1",
+            (token_hash,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail={"error": "invalid_token", "message": "Invalid or already-used reset token"})
+        if row["expires_at"] < now:
+            raise HTTPException(status_code=400, detail={"error": "token_expired", "message": "Reset token expired"})
+
+        password_hash = hash_password(body.password)
+        conn.execute("UPDATE profiles SET password_hash=?, updated_at=? WHERE id=?", (password_hash, utcnow(), row["profile_id"]))
+        conn.execute("UPDATE password_resets SET used_at=? WHERE id=?", (utcnow(), row["id"]))
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        LOGGER.exception("Password reset failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "password_reset_failed", "message": "Password reset could not be completed."},
+        )
+    finally:
+        conn.close()
+
+    safe_log_activity(row["profile_id"], "password_reset_completed", {"profile_id": row["profile_id"]})
+    return {"ok": True, "message": "Password has been reset. You can now log in."}
+
+
 @router.post("/v1/profile/login")
 def profile_login(body: ProfileLoginRequest) -> Dict[str, Any]:
     if not is_valid_email(body.email):
@@ -796,6 +1218,126 @@ def profile_login(body: ProfileLoginRequest) -> Dict[str, Any]:
             "plan": profile["plan"] or "free",
         },
     }
+
+
+@router.get("/v1/auth/providers")
+def auth_providers() -> Dict[str, Any]:
+    return {provider: provider_overview(provider) for provider in ("google", "microsoft", "okta")}
+
+
+@router.get("/v1/auth/diagnostics")
+def auth_diagnostics() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "jwt_secret_configured": SESSION_SECRET not in {"", "dev_only_session_secret", "change_me_in_production"},
+        "resend_configured": resend_enabled(),
+        "forgot_password_ready": True,
+        "google_configured": provider_settings("google")["configured"],
+        "microsoft_configured": provider_settings("microsoft")["configured"],
+        "okta_configured": provider_settings("okta")["configured"],
+        "dashboard_url": APP_DASHBOARD_URL,
+    }
+
+
+@router.get("/v1/auth/google/start")
+def auth_google_start() -> Any:
+    return oauth_start_response("google")
+
+
+@router.get("/v1/auth/google/callback")
+def auth_google_callback(request: Request, code: Optional[str] = Query(None), state: Optional[str] = Query(None), error: Optional[str] = Query(None)) -> Any:
+    if error:
+        raise HTTPException(status_code=400, detail={"error": "oauth_error", "message": "OAuth provider returned an error"})
+    cookie_state = request.cookies.get(oauth_state_cookie_name("google"), "")
+    return oauth_callback_route("google", code or "", state or "", cookie_state)
+
+
+@router.get("/v1/auth/microsoft/start")
+def auth_microsoft_start() -> Any:
+    return oauth_start_response("microsoft")
+
+
+@router.get("/v1/auth/microsoft/callback")
+def auth_microsoft_callback(request: Request, code: Optional[str] = Query(None), state: Optional[str] = Query(None), error: Optional[str] = Query(None)) -> Any:
+    if error:
+        raise HTTPException(status_code=400, detail={"error": "oauth_error", "message": "OAuth provider returned an error"})
+    cookie_state = request.cookies.get(oauth_state_cookie_name("microsoft"), "")
+    return oauth_callback_route("microsoft", code or "", state or "", cookie_state)
+
+
+@router.get("/v1/auth/okta/start")
+def auth_okta_start() -> Any:
+    return oauth_start_response("okta")
+
+
+@router.get("/v1/auth/okta/callback")
+def auth_okta_callback(request: Request, code: Optional[str] = Query(None), state: Optional[str] = Query(None), error: Optional[str] = Query(None)) -> Any:
+    if error:
+        raise HTTPException(status_code=400, detail={"error": "oauth_error", "message": "OAuth provider returned an error"})
+    cookie_state = request.cookies.get(oauth_state_cookie_name("okta"), "")
+    return oauth_callback_route("okta", code or "", state or "", cookie_state)
+
+
+def oauth_callback_route(provider: str, code: str, state: str, cookie_state: str) -> Any:
+    settings = provider_settings(provider)
+    if not settings["configured"]:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "provider": provider,
+                "configured": False,
+                "message": f"{settings['label']} is not configured yet.",
+            },
+        )
+
+    if not code or not state or not cookie_state:
+        raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state validation failed"})
+    if state != cookie_state:
+        raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state validation failed"})
+    decode_oauth_state(provider, state)
+
+    token_response = httpx.post(
+        settings["token_url"],
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": settings["redirect_uri"],
+            "client_id": settings["client_id"],
+            "client_secret": settings["client_secret"],
+        },
+        headers={"Accept": "application/json"},
+        timeout=httpx.Timeout(connect=RESEND_CONNECT_TIMEOUT, read=RESEND_READ_TIMEOUT),
+    )
+    token_response.raise_for_status()
+    token_data = token_response.json()
+    claims = oauth_claims_from_token(provider, settings, token_data)
+    email, name, verified = oauth_profile_from_claims(provider, claims)
+    subject = str(claims.get("sub") or "").strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail={"error": "oauth_subject_missing", "message": "OAuth provider did not return a subject identifier"})
+
+    profile = upsert_oauth_profile(provider, subject, email, name, verified)
+    session_token = create_session_token(profile["id"], profile["email"])
+    safe_log_activity(profile["id"], f"{provider}_oauth_login", {"email": profile["email"], "provider": provider})
+    profile_payload = {
+        "id": profile["id"],
+        "name": profile["name"],
+        "email": profile["email"],
+        "company": profile["company"],
+        "use_case": profile["use_case"],
+        "verified": bool(profile["verified"]),
+        "plan": profile["plan"] or "free",
+    }
+    fragment = urllib.parse.urlencode(
+        {
+            "session_token": session_token,
+            "profile": json.dumps(profile_payload, separators=(",", ":")),
+        }
+    )
+    response = RedirectResponse(url=f"{APP_DASHBOARD_URL.rstrip('/')}/login#{fragment}", status_code=302)
+    response.delete_cookie(oauth_state_cookie_name(provider), path="/")
+    return response
 
 
 @router.get("/v1/profile/me")

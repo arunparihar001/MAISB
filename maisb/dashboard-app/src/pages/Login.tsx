@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import Badge from '../components/Badge'
 import Button from '../components/Button'
@@ -25,6 +25,31 @@ export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    const rawHash = window.location.hash.replace(/^#/, '')
+    if (!rawHash) return
+
+    try {
+      const params = new URLSearchParams(rawHash)
+      const sessionToken = params.get('session_token') || ''
+      const profileRaw = params.get('profile') || ''
+      if (!sessionToken) return
+
+      const profile = profileRaw ? (JSON.parse(profileRaw) as LoginResponse['profile']) : null
+      setSessionToken(sessionToken)
+      if (profileRaw) {
+        setStoredProfile(profile as LoginResponse['profile'])
+        setStoredEmail((profile as LoginResponse['profile']).email)
+      }
+      clearSelectedPlan()
+      setApiKeyExists(false)
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
+      navigate('/select-plan', { replace: true })
+    } catch {
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
+    }
+  }, [navigate])
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -91,6 +116,9 @@ export default function Login() {
 
           <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
             <Link to="/signup" style={{ fontSize: '0.9rem' }}>Need an account? Sign up →</Link>
+          </div>
+          <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+            <Link to="/forgot-password" style={{ fontSize: '0.9rem' }}>Forgot password?</Link>
           </div>
 
           {error && <p className="error">{error}</p>}

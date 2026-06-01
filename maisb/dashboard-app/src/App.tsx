@@ -12,6 +12,7 @@ import Dashboard from './pages/Dashboard'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Pricing from './pages/Pricing'
+import ForgotPassword from './pages/ForgotPassword'
 import Privacy from './pages/Privacy'
 import Refund from './pages/Refund'
 import Reports from './pages/Reports'
@@ -19,6 +20,7 @@ import Security from './pages/Security'
 import SelectPlan from './pages/SelectPlan'
 import Settings from './pages/Settings'
 import Signup from './pages/Signup'
+import ResetPassword from './pages/ResetPassword'
 import Team from './pages/Team'
 import Terms from './pages/Terms'
 import Traces from './pages/Traces'
@@ -102,6 +104,8 @@ export default function App() {
       <Route path="/signup" element={<AuthEntry><Signup /></AuthEntry>} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/login" element={<AuthEntry><Login /></AuthEntry>} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
 
       <Route path="/select-plan" element={<RequireVerified><SelectPlan /></RequireVerified>} />
       <Route path="/api-keys" element={<RequireVerified><ApiKeys /></RequireVerified>} />
