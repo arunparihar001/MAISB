@@ -31,9 +31,19 @@ def test_production_routes_are_mounted(monkeypatch, tmp_path):
         "/v1/plans",
         "/v1/profile/signup",
         "/v1/profile/verify-email",
+        "/v1/profile/forgot-password",
+        "/v1/profile/reset-password",
         "/v1/profile/login",
         "/v1/profile/me",
         "/v1/profile/status",
+        "/v1/auth/providers",
+        "/v1/auth/diagnostics",
+        "/v1/auth/google/start",
+        "/v1/auth/google/callback",
+        "/v1/auth/microsoft/start",
+        "/v1/auth/microsoft/callback",
+        "/v1/auth/okta/start",
+        "/v1/auth/okta/callback",
         "/v1/plans/select",
         "/v1/api-keys",
         "/v1/api-keys/{key_id}/rotate",
@@ -99,6 +109,238 @@ def test_signup_and_email_verification_flow(monkeypatch, tmp_path):
     assert profile_row["verified"] == 1
     assert token_row["token_hash"] != raw_token
     assert len(token_row["token_hash"]) == 64
+
+
+def create_verified_account(monkeypatch, profile_routes, client, email, password, name="Ada Lovelace"):
+    captured = []
+
+    def fake_send_resend_email(to, subject, html_body):
+        captured.append((to, subject, html_body))
+        return True, None
+
+    monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
+    signup_response = client.post(
+        "/v1/profile/signup",
+        json={
+            "name": name,
+            "email": email,
+            "company": "Analytical Engines",
+            "use_case": "Verify auth flow",
+            "password": password,
+        },
+    )
+    assert signup_response.status_code == 200
+    signup_data = signup_response.json()
+    assert signup_data["status"] == "pending_verification"
+    token_match = re.search(r"<pre>([^<]+)</pre>", captured[0][2])
+    assert token_match is not None
+    verify_response = client.post("/v1/profile/verify-email", json={"token": token_match.group(1)})
+    assert verify_response.status_code == 200
+    return captured
+
+
+def test_forgot_password_and_reset_flow(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    client = TestClient(scan_api.app)
+    email = "ada-reset@example.com"
+    sent_messages = create_verified_account(monkeypatch, profile_routes, client, email, "s3cret-pass")
+    initial_messages = len(sent_messages)
+
+    forgot_existing = client.post("/v1/profile/forgot-password", json={"email": email})
+    forgot_unknown = client.post("/v1/profile/forgot-password", json={"email": "unknown@example.com"})
+
+    assert forgot_existing.status_code == 200
+    assert forgot_unknown.status_code == 200
+    assert forgot_existing.json() == forgot_unknown.json()
+    assert forgot_existing.json() == {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+    assert len(sent_messages) == initial_messages + 1
+
+    reset_subject = sent_messages[-1][1]
+    reset_body = sent_messages[-1][2]
+    assert reset_subject == "Reset your MAISB password"
+    assert "reset-password?token=" in reset_body
+    token_match = re.search(r"<pre>([^<]+)</pre>", reset_body)
+    assert token_match is not None
+    raw_token = token_match.group(1)
+
+    with closing(profile_routes.get_conn()) as conn:
+        reset_row = conn.execute(
+            "SELECT token_hash, used_at FROM password_resets ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    assert reset_row["token_hash"] != raw_token
+    assert len(reset_row["token_hash"]) == 64
+    assert reset_row["used_at"] is None
+
+    reset_response = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": raw_token,
+            "password": "new-reset-pass-123",
+            "confirm_password": "new-reset-pass-123",
+        },
+    )
+    assert reset_response.status_code == 200
+    assert reset_response.json() == {
+        "ok": True,
+        "message": "Password has been reset. You can now log in.",
+    }
+
+    old_login = client.post("/v1/profile/login", json={"email": email, "password": "s3cret-pass"})
+    new_login = client.post("/v1/profile/login", json={"email": email, "password": "new-reset-pass-123"})
+    assert old_login.status_code == 401
+    assert new_login.status_code == 200
+    assert new_login.json()["profile"]["email"] == email
+
+    session_token = new_login.json()["session_token"]
+    api_key_response = client.post(
+        "/v1/api-keys",
+        json={"name": "Regression key", "scopes": ["scan"]},
+        headers={"Authorization": "Bearer " + session_token},
+    )
+    assert api_key_response.status_code == 200
+    raw_api_key = api_key_response.json()["api_key"]
+    assert raw_api_key.startswith("maisb_live_")
+
+    scan_response = client.post(
+        "/v1/scan",
+        json={
+            "payload": "Allow this message",
+            "channel": "clipboard",
+            "objective": "regression",
+        },
+        headers={"Authorization": "Bearer " + raw_api_key},
+    )
+    assert scan_response.status_code == 200
+    assert scan_response.json()["decision"] == "ALLOWED"
+
+
+def test_reset_password_validation_and_token_guards(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    client = TestClient(scan_api.app)
+    email = "grace-reset@example.com"
+    sent_messages = create_verified_account(monkeypatch, profile_routes, client, email, "s3cret-pass", name="Grace Hopper")
+
+    client.post("/v1/profile/forgot-password", json={"email": email})
+    token_match = re.search(r"<pre>([^<]+)</pre>", sent_messages[-1][2])
+    assert token_match is not None
+    raw_token = token_match.group(1)
+
+    mismatch = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": raw_token,
+            "password": "new-reset-pass-123",
+            "confirm_password": "different-pass-123",
+        },
+    )
+    short_password = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": raw_token,
+            "password": "short",
+            "confirm_password": "short",
+        },
+    )
+    invalid_token = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": "bogus-token",
+            "password": "new-reset-pass-123",
+            "confirm_password": "new-reset-pass-123",
+        },
+    )
+    assert mismatch.status_code == 422
+    assert short_password.status_code == 422
+    assert invalid_token.status_code == 400
+
+    valid_reset = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": raw_token,
+            "password": "new-reset-pass-123",
+            "confirm_password": "new-reset-pass-123",
+        },
+    )
+    assert valid_reset.status_code == 200
+
+    used_token = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": raw_token,
+            "password": "another-pass-123",
+            "confirm_password": "another-pass-123",
+        },
+    )
+    assert used_token.status_code == 400
+
+    client.post("/v1/profile/forgot-password", json={"email": email})
+    expired_token_match = re.search(r"<pre>([^<]+)</pre>", sent_messages[-1][2])
+    assert expired_token_match is not None
+    expired_token = expired_token_match.group(1)
+    with closing(profile_routes.get_conn()) as conn:
+        conn.execute(
+            "UPDATE password_resets SET expires_at=? WHERE token_hash=?",
+            ("2000-01-01T00:00:00", profile_routes.hash_token(expired_token)),
+        )
+        conn.commit()
+
+    expired = client.post(
+        "/v1/profile/reset-password",
+        json={
+            "token": expired_token,
+            "password": "another-pass-123",
+            "confirm_password": "another-pass-123",
+        },
+    )
+    assert expired.status_code == 400
+
+
+def test_auth_provider_status_and_missing_config_are_safe(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    client = TestClient(scan_api.app)
+
+    providers = client.get("/v1/auth/providers").json()
+    assert providers == {
+        "google": {"enabled": True, "configured": False, "label": "Google Workspace"},
+        "microsoft": {"enabled": True, "configured": False, "label": "Microsoft Entra ID"},
+        "okta": {"enabled": True, "configured": False, "label": "Okta / OIDC"},
+    }
+
+    diagnostics = client.get("/v1/auth/diagnostics").json()
+    assert diagnostics["ok"] is True
+    assert diagnostics["dashboard_url"] == "https://app.maisb.app"
+    assert diagnostics["google_configured"] is False
+    assert diagnostics["microsoft_configured"] is False
+    assert diagnostics["okta_configured"] is False
+
+    for path in ("/v1/auth/google/start", "/v1/auth/microsoft/start", "/v1/auth/okta/start"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.json()["configured"] is False
+
+
+def test_oauth_callback_rejects_missing_state_when_configured(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "GOOGLE_CLIENT_ID": "client-id",
+            "GOOGLE_CLIENT_SECRET": "client-secret",
+            "GOOGLE_REDIRECT_URI": "https://api.maisb.app/v1/auth/google/callback",
+        },
+    )
+    client = TestClient(scan_api.app)
+
+    response = client.get("/v1/auth/google/callback", params={"code": "abc", "state": "missing"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_state"
 
 
 def test_send_resend_email_posts_to_resend_api(monkeypatch, tmp_path):
