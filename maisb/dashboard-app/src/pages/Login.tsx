@@ -38,9 +38,9 @@ export default function Login() {
 
       const profile = profileRaw ? (JSON.parse(profileRaw) as LoginResponse['profile']) : null
       setSessionToken(sessionToken)
-      if (profileRaw) {
-        setStoredProfile(profile as LoginResponse['profile'])
-        setStoredEmail((profile as LoginResponse['profile']).email)
+      if (profile) {
+        setStoredProfile(profile)
+        setStoredEmail(profile.email)
       }
       clearSelectedPlan()
       setApiKeyExists(false)
@@ -48,6 +48,7 @@ export default function Login() {
       navigate('/select-plan', { replace: true })
     } catch (error) {
       console.error('Failed to process OAuth login fragment', error)
+      setError('Unable to complete OAuth sign-in. Please try again.')
       window.history.replaceState({}, document.title, window.location.pathname + window.location.search)
     }
   }, [navigate])

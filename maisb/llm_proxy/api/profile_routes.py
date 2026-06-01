@@ -85,7 +85,17 @@ def utcnow() -> str:
     return dt.datetime.utcnow().replace(microsecond=0).isoformat()
 
 
-def sha256(value: str) -> str:
+def hash_token(value: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        value.encode("utf-8"),
+        b"MAISB token hash",
+        100000,
+        dklen=32,
+    ).hex()
+
+
+def hash_api_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -705,7 +715,7 @@ def upsert_oauth_profile(provider: str, subject: str, email: str, name: str, ver
                     profile_id,
                     name,
                     email,
-                    "Android / AI agent runtime protection",
+                    "OAuth / SSO sign-in",
                     1 if verified else 0,
                     now,
                     now,
@@ -762,7 +772,7 @@ def oauth_start_response(provider: str) -> Any:
     response = RedirectResponse(url=url, status_code=302)
     response.set_cookie(
         oauth_state_cookie_name(provider),
-        sha256(state),
+        hash_token(state),
         httponly=True,
         secure=is_production_env(),
         samesite="lax",
@@ -840,7 +850,7 @@ def resolve_profile_from_bearer(authorization: Optional[str], allow_api_key: boo
         pass
 
     if allow_api_key:
-        key_hash = sha256(token)
+        key_hash = hash_api_key(token)
         key_row = conn.execute(
             "SELECT profile_id, key_id FROM api_keys WHERE key_hash=? AND COALESCE(status,'active')='active'",
             (key_hash,),
@@ -1008,7 +1018,7 @@ def profile_signup(body: ProfileSignupRequest) -> Dict[str, Any]:
                 )
 
         raw_token = secrets.token_urlsafe(32)
-        token_hash = sha256(raw_token)
+        token_hash = hash_token(raw_token)
         verification_id = f"ver_{secrets.token_hex(10)}"
         expires_at = (dt.datetime.utcnow() + dt.timedelta(hours=TOKEN_EXPIRY_HOURS)).isoformat()
         conn.execute(
@@ -1081,8 +1091,8 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
     if not body.token.strip():
         raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Token is required"})
 
-    token_hash = sha256(body.token.strip())
-    now = dt.datetime.utcnow().isoformat()
+    token_hash = hash_token(body.token.strip())
+    now = utcnow()
 
     conn = get_conn()
     row = conn.execute(
@@ -1116,7 +1126,7 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
         profile = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
         if profile:
             raw_token = secrets.token_urlsafe(32)
-            token_hash = sha256(raw_token)
+            token_hash = hash_token(raw_token)
             now = utcnow()
             expires_at = (dt.datetime.fromisoformat(now) + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
             reset_id = f"reset_{secrets.token_hex(10)}"
@@ -1158,7 +1168,7 @@ def profile_reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
     if not token:
         raise HTTPException(status_code=422, detail={"error": "validation_error", "message": "Token is required"})
 
-    token_hash = sha256(token)
+    token_hash = hash_token(token)
     now = dt.datetime.utcnow().isoformat()
     conn = get_conn()
     try:
@@ -1299,7 +1309,7 @@ def oauth_callback_route(provider: str, code: str, state: str, cookie_state: str
 
     if not code or not state or not cookie_state:
         raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state validation failed"})
-    if sha256(state) != cookie_state:
+    if hash_token(state) != cookie_state:
         raise HTTPException(status_code=400, detail={"error": "invalid_state", "message": "OAuth state validation failed"})
     decode_oauth_state(provider, state)
 
@@ -1459,7 +1469,7 @@ def create_api_key(body: APIKeyCreateRequest, authorization: Optional[str] = Hea
         raise HTTPException(status_code=403, detail={"error": "free_plan_limit", "message": "Free plan allows first API key generation only"})
 
     raw_key = f"maisb_live_{secrets.token_urlsafe(32)}"
-    key_hash = sha256(raw_key)
+    key_hash = hash_api_key(raw_key)
     key_id = f"key_{secrets.token_hex(8)}"
     key_prefix = raw_key[:14]
     now = utcnow()

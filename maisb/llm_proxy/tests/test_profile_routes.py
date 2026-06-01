@@ -287,7 +287,7 @@ def test_reset_password_validation_and_token_guards(monkeypatch, tmp_path):
     with closing(profile_routes.get_conn()) as conn:
         conn.execute(
             "UPDATE password_resets SET expires_at=? WHERE token_hash=?",
-            ("2000-01-01T00:00:00", profile_routes.sha256(expired_token)),
+            ("2000-01-01T00:00:00", profile_routes.hash_token(expired_token)),
         )
         conn.commit()
 
