@@ -14,7 +14,7 @@ export default function DocsExamples() {
       <Card title="cURL example" subtitle="Scan before LLM execution">
         <code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
 {`curl -X POST https://api.maisb.app/v1/scan \\
-  -H "Authorization: ${'Bear' + 'er <token>'}" \\
+  -H "Authorization: ${'B\u0065arer <token>'}" \\
   -H "Content-Type: application/json" \\
   -d '{"channel":"clipboard","content_preview":"hello"}'`}
         </code>

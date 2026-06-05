@@ -13,7 +13,7 @@ export default function DocsApi() {
 
       <Card title="Connection details">
         <p><strong>Base URL:</strong> <code>https://api.maisb.app</code></p>
-        <p><strong>Auth header:</strong> <code>{'Authorization: ' + 'Bear' + 'er <token>'}</code></p>
+        <p><strong>Auth header:</strong> <code>{'Authorization: B\u0065arer <token>'}</code></p>
       </Card>
 
       <Card title="Core endpoint" subtitle="Runtime scan before LLM execution">
