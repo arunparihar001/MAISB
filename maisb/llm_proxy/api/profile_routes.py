@@ -1122,10 +1122,11 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
 def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
     email = body.email.strip().lower()
     if is_valid_email(email):
-        conn = get_conn()
+        conn: Optional[sqlite3.Connection] = None
         try:
+            conn = get_conn()
             profile = conn.execute(
-                "SELECT id FROM profiles WHERE lower(email)=lower(?) AND COALESCE(verified, 0)=1",
+                "SELECT id FROM profiles WHERE email=? AND COALESCE(verified, 0)=1",
                 (email,),
             ).fetchone()
             if profile:
@@ -1147,10 +1148,12 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
                         {"email": email, "diagnostics": diagnostics},
                     )
         except Exception:
-            conn.rollback()
+            if conn is not None:
+                conn.rollback()
             LOGGER.exception("Password reset request failed")
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
     return {
         "ok": True,
         "message": "If an account exists for this email, password reset instructions have been sent.",
