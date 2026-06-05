@@ -515,7 +515,7 @@ def send_verification_email(email: str, raw_token: str) -> Tuple[bool, Optional[
 
 
 def send_password_reset_email(email: str, raw_token: str, expires_at: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    reset_url = f"{APP_DASHBOARD_URL.rstrip('/')}/reset-password?token={urllib.parse.quote(raw_token)}"
+    reset_url = f"https://app.maisb.app/reset-password?token={urllib.parse.quote(raw_token)}"
     body = (
         "<p>We received a request to reset your MAISB password.</p>"
         f"<p><a href='{html.escape(reset_url)}'>Reset your password</a></p>"
@@ -1122,34 +1122,38 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
 def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
     email = body.email.strip().lower()
     if is_valid_email(email):
-        conn = get_conn()
-        profile = conn.execute("SELECT * FROM profiles WHERE lower(email)=lower(?)", (email,)).fetchone()
-        if profile:
-            raw_token = secrets.token_urlsafe(32)
-            token_hash = hash_token(raw_token)
-            now = utcnow()
-            expires_at = (dt.datetime.fromisoformat(now) + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
-            reset_id = f"reset_{secrets.token_hex(10)}"
-            try:
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = get_conn()
+            profile = conn.execute(
+                "SELECT id FROM profiles WHERE email=? AND COALESCE(verified, 0)=1",
+                (email,),
+            ).fetchone()
+            if profile:
+                raw_token = secrets.token_urlsafe(32)
+                token_hash = hash_token(raw_token)
+                now = utcnow()
+                expires_at = (dt.datetime.fromisoformat(now) + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
+                reset_id = f"reset_{secrets.token_hex(10)}"
                 conn.execute(
                     "INSERT INTO password_resets (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
                     (reset_id, profile["id"], token_hash, expires_at, now),
                 )
                 conn.commit()
-            except Exception:
+                email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
+                if resend_enabled() and not email_sent:
+                    safe_log_activity(
+                        profile["id"],
+                        "password_reset_email_failed",
+                        {"email": email, "diagnostics": diagnostics},
+                    )
+        except Exception:
+            if conn is not None:
                 conn.rollback()
-                LOGGER.exception("Password reset request failed")
-            finally:
+            LOGGER.exception("Password reset request failed")
+        finally:
+            if conn is not None:
                 conn.close()
-            email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
-            if resend_enabled() and not email_sent:
-                safe_log_activity(
-                    profile["id"],
-                    "password_reset_email_failed",
-                    {"email": email, "diagnostics": diagnostics},
-                )
-        else:
-            conn.close()
     return {
         "ok": True,
         "message": "If an account exists for this email, password reset instructions have been sent.",
