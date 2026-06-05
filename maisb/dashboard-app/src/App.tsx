@@ -25,6 +25,10 @@ import Team from './pages/Team'
 import Terms from './pages/Terms'
 import Traces from './pages/Traces'
 import VerifyEmail from './pages/VerifyEmail'
+import DocsHome from './pages/docs/DocsHome'
+import DocsApi from './pages/docs/DocsApi'
+import DocsSdk from './pages/docs/DocsSdk'
+import DocsExamples from './pages/docs/DocsExamples'
 
 type Gate = 'ok' | 'login' | 'verify-email' | 'select-plan' | 'api-keys'
 
@@ -100,6 +104,10 @@ export default function App() {
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/refund" element={<Refund />} />
+      <Route path="/docs" element={<DocsHome />} />
+      <Route path="/docs/api" element={<DocsApi />} />
+      <Route path="/docs/sdk" element={<DocsSdk />} />
+      <Route path="/docs/examples" element={<DocsExamples />} />
 
       <Route path="/signup" element={<AuthEntry><Signup /></AuthEntry>} />
       <Route path="/verify-email" element={<VerifyEmail />} />
