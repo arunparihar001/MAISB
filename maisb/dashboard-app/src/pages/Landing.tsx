@@ -17,7 +17,7 @@ export default function Landing() {
           <a href="#developers">Developers</a>
           <a href="#security">Security</a>
           <Link to="/pricing">Pricing</Link>
-          <a href="https://docs.maisb.app" target="_blank" rel="noopener noreferrer">Docs</a>
+          <Link to="/docs">Docs</Link>
           <Link to="/login"><Button variant="secondary">Sign in</Button></Link>
           <Link to="/signup"><Button>Get started</Button></Link>
         </div>
@@ -34,7 +34,7 @@ export default function Landing() {
             </p>
             <div className="row-inline">
               <Link to="/signup"><Button>Start for free</Button></Link>
-              <a href="https://docs.maisb.app/api" target="_blank" rel="noopener noreferrer"><Button variant="secondary">View API docs</Button></a>
+              <Link to="/docs/api"><Button variant="secondary">View API docs</Button></Link>
             </div>
           </div>
 
@@ -381,15 +381,15 @@ export default function Landing() {
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.5rem' }}>
               <li><a href="#features">Features</a></li>
               <li><Link to="/pricing">Pricing</Link></li>
-              <li><a href="https://docs.maisb.app" target="_blank" rel="noopener noreferrer">Documentation</a></li>
+              <li><Link to="/docs">Documentation</Link></li>
             </ul>
           </div>
           <div>
             <p><strong>Developers</strong></p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.5rem' }}>
-              <li><a href="https://docs.maisb.app/api" target="_blank" rel="noopener noreferrer">API Reference</a></li>
-              <li><a href="https://docs.maisb.app/sdk" target="_blank" rel="noopener noreferrer">SDK Guides</a></li>
-              <li><a href="https://docs.maisb.app/examples" target="_blank" rel="noopener noreferrer">Code Examples</a></li>
+              <li><Link to="/docs/api">API Reference</Link></li>
+              <li><Link to="/docs/sdk">SDK Guides</Link></li>
+              <li><Link to="/docs/examples">Code Examples</Link></li>
             </ul>
           </div>
           <div>

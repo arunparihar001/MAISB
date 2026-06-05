@@ -80,7 +80,7 @@ export default function Dashboard() {
             </code>
           </div>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <a href="https://docs.maisb.app/api/scan" target="_blank" rel="noopener noreferrer">
+            <a href="/docs/api">
               <Button variant="secondary">View API docs</Button>
             </a>
             <a href="/api-keys">
