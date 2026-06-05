@@ -9,6 +9,10 @@ import Billing from './pages/Billing'
 import BoundaryProtection from './pages/BoundaryProtection'
 import Certify from './pages/Certify'
 import Dashboard from './pages/Dashboard'
+import Docs from './pages/Docs'
+import DocsApi from './pages/DocsApi'
+import DocsExamples from './pages/DocsExamples'
+import DocsSdk from './pages/DocsSdk'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Pricing from './pages/Pricing'
@@ -97,6 +101,10 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/pricing" element={<Pricing />} />
+      <Route path="/docs" element={<Docs />} />
+      <Route path="/docs/api" element={<DocsApi />} />
+      <Route path="/docs/sdk" element={<DocsSdk />} />
+      <Route path="/docs/examples" element={<DocsExamples />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/refund" element={<Refund />} />

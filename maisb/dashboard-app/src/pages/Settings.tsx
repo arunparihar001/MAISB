@@ -161,7 +161,7 @@ export default function Settings() {
             <Card title="API access" subtitle="Programmatic workspace management">
               <p className="muted">Full API for automation. Create API keys, manage team, export reports, and more via our REST API.</p>
               <div style={{ marginTop: '1rem' }}>
-                <a href="https://docs.maisb.app/api" target="_blank" rel="noopener noreferrer">
+                <a href="/docs/api">
                   <Button variant="secondary">View API docs</Button>
                 </a>
               </div>
