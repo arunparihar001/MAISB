@@ -1196,17 +1196,45 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
                 "message": "If an account exists for this email, password reset instructions have been sent.",
             }
 
-        LOGGER.info("Forgot password resend result: email_domain=%s resend_attempted=true", email_domain or "unknown")
         email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
-        provider_status = diagnostics.get("status_code") if isinstance(diagnostics, dict) else None
-        provider_error = diagnostics.get("error") if isinstance(diagnostics, dict) else None
-        LOGGER.info(
-            "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=%s provider_status=%s provider_error=%s",
-            email_domain or "unknown",
-            email_sent,
-            provider_status,
-            provider_error,
-        )
+        if email_sent:
+            LOGGER.info(
+                "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=true",
+                email_domain or "unknown",
+            )
+        else:
+            diagnostics_dict = diagnostics if isinstance(diagnostics, dict) else {}
+            raw_provider_status = diagnostics_dict.get("status_code")
+            if isinstance(raw_provider_status, int):
+                if 100 <= raw_provider_status < 200:
+                    safe_provider_status = "1xx"
+                elif 200 <= raw_provider_status < 300:
+                    safe_provider_status = "2xx"
+                elif 300 <= raw_provider_status < 400:
+                    safe_provider_status = "3xx"
+                elif 400 <= raw_provider_status < 500:
+                    safe_provider_status = "4xx"
+                elif 500 <= raw_provider_status < 600:
+                    safe_provider_status = "5xx"
+                else:
+                    safe_provider_status = "other"
+            else:
+                safe_provider_status = "unknown"
+
+            normalized_error = str(diagnostics_dict.get("error", "")).strip().lower()
+            safe_provider_error = {
+                "request_error": "request_error",
+                "http_error": "http_error",
+                "service_unavailable": "service_unavailable",
+                "unauthorized": "unauthorized",
+                "invalid_request": "invalid_request",
+            }.get(normalized_error, "other")
+            LOGGER.info(
+                "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=false provider_status=%s provider_error=%s",
+                email_domain or "unknown",
+                safe_provider_status,
+                safe_provider_error,
+            )
     except Exception as exc:
         if conn is not None:
             conn.rollback()

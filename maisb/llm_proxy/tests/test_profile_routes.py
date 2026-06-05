@@ -281,7 +281,7 @@ def test_forgot_password_db_insert_failure_does_not_send_email(monkeypatch, tmp_
             self._inner_conn = inner_conn
 
         def execute(self, sql, params=()):
-            if "INSERT INTO password_resets" in sql:
+            if re.match(r"^\s*INSERT\s+INTO\s+PASSWORD_RESETS\b", sql, flags=re.IGNORECASE):
                 raise sqlite3.IntegrityError("forced password_resets failure")
             return self._inner_conn.execute(sql, params)
 
@@ -333,7 +333,7 @@ def test_forgot_password_resend_failure_logs_safely(monkeypatch, tmp_path, caplo
 
     monkeypatch.setattr(profile_routes, "send_password_reset_email", fake_send_password_reset_email)
 
-    caplog.set_level("INFO", logger=profile_routes.__name__)
+    caplog.set_level("INFO", logger=profile_routes.LOGGER.name)
     caplog.clear()
 
     forgot = client.post("/v1/profile/forgot-password", json={"email": email})
@@ -347,8 +347,8 @@ def test_forgot_password_resend_failure_logs_safely(monkeypatch, tmp_path, caplo
     assert "safe-logs@example.com" not in combined_logs
     assert "email_domain=example.com" in combined_logs
     assert "resend_attempted=true" in combined_logs
-    assert "resend_sent=False" in combined_logs
-    assert "provider_status=503" in combined_logs
+    assert "resend_sent=false" in combined_logs
+    assert "provider_status=5xx" in combined_logs
     assert "provider_error=service_unavailable" in combined_logs
 
 
