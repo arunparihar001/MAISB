@@ -1,4 +1,5 @@
 import re
+import sqlite3
 import sys
 from contextlib import closing
 
@@ -263,6 +264,92 @@ def test_forgot_password_unverified_account_does_not_send_reset(monkeypatch, tmp
             (profile_id,),
         ).fetchone()["c"]
     assert reset_count == 0
+
+
+def test_forgot_password_db_insert_failure_does_not_send_email(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    client = TestClient(scan_api.app)
+    email = "db-fail@example.com"
+    create_verified_account(monkeypatch, profile_routes, client, email, "s3cret-pass")
+
+    original_get_conn = profile_routes.get_conn
+
+    class FailingResetInsertConn:
+        def __init__(self, inner_conn):
+            self._inner_conn = inner_conn
+
+        def execute(self, sql, params=()):
+            if re.match(r"^\s*INSERT\s+INTO\s+PASSWORD_RESETS\b", sql, flags=re.IGNORECASE):
+                raise sqlite3.IntegrityError("forced password_resets failure")
+            return self._inner_conn.execute(sql, params)
+
+        def commit(self):
+            return self._inner_conn.commit()
+
+        def rollback(self):
+            return self._inner_conn.rollback()
+
+        def close(self):
+            return self._inner_conn.close()
+
+    monkeypatch.setattr(profile_routes, "get_conn", lambda: FailingResetInsertConn(original_get_conn()))
+    send_calls = []
+
+    def fake_send_password_reset_email(*args, **kwargs):
+        send_calls.append((args, kwargs))
+        return True, None
+
+    monkeypatch.setattr(profile_routes, "send_password_reset_email", fake_send_password_reset_email)
+
+    forgot = client.post("/v1/profile/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    assert forgot.json() == {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+    assert send_calls == []
+
+    with closing(original_get_conn()) as conn:
+        profile_id = conn.execute("SELECT id FROM profiles WHERE email=?", (email,)).fetchone()["id"]
+        reset_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM password_resets WHERE profile_id=?",
+            (profile_id,),
+        ).fetchone()["c"]
+    assert reset_count == 0
+
+
+def test_forgot_password_resend_failure_logs_safely(monkeypatch, tmp_path, caplog):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    client = TestClient(scan_api.app)
+    email = "safe-logs@example.com"
+    create_verified_account(monkeypatch, profile_routes, client, email, "s3cret-pass")
+
+    def fake_send_password_reset_email(*args, **kwargs):
+        return False, {"status_code": 503, "error": "service_unavailable", "message": "temporary outage"}
+
+    monkeypatch.setattr(profile_routes, "send_password_reset_email", fake_send_password_reset_email)
+
+    caplog.set_level("INFO", logger=profile_routes.LOGGER.name)
+    caplog.clear()
+
+    forgot = client.post("/v1/profile/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    assert forgot.json() == {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+
+    combined_logs = "\n".join(caplog.messages)
+    assert "safe-logs@example.com" not in combined_logs
+    assert "email_domain=example.com" in combined_logs
+    assert "resend_attempted=true" in combined_logs
+    assert "resend_sent=false" in combined_logs
+    assert "provider_status=5xx" in combined_logs
+    assert "provider_error=service_unavailable" in combined_logs
 
 
 def test_reset_password_validation_and_token_guards(monkeypatch, tmp_path):

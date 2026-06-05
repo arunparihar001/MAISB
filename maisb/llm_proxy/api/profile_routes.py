@@ -103,6 +103,13 @@ def is_valid_email(value: str) -> bool:
     return bool(re.fullmatch(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", (value or "").strip()))
 
 
+def email_domain_for_logs(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if "@" not in normalized:
+        return ""
+    return normalized.split("@", 1)[1]
+
+
 def is_production_env() -> bool:
     checks = [
         os.environ.get("APP_ENV", ""),
@@ -1121,39 +1128,125 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
 @router.post("/v1/profile/forgot-password")
 def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
     email = body.email.strip().lower()
-    if is_valid_email(email):
-        conn: Optional[sqlite3.Connection] = None
+    email_domain = email_domain_for_logs(email)
+    if not is_valid_email(email):
+        LOGGER.info(
+            "Forgot password ignored: email_domain=%s invalid_email=true",
+            email_domain or "unknown",
+        )
+        return {
+            "ok": True,
+            "message": "If an account exists for this email, password reset instructions have been sent.",
+        }
+
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = get_conn()
+        profile = conn.execute(
+            "SELECT id, email, verified FROM profiles WHERE lower(email)=lower(?)",
+            (email,),
+        ).fetchone()
+
+        if not profile:
+            LOGGER.info(
+                "Forgot password lookup result: email_domain=%s account_found=false",
+                email_domain or "unknown",
+            )
+            return {
+                "ok": True,
+                "message": "If an account exists for this email, password reset instructions have been sent.",
+            }
+
+        profile_verified = bool(profile["verified"])
+        if not profile_verified:
+            LOGGER.info(
+                "Forgot password lookup result: email_domain=%s account_found=true profile_verified=false",
+                email_domain or "unknown",
+            )
+            return {
+                "ok": True,
+                "message": "If an account exists for this email, password reset instructions have been sent.",
+            }
+
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hash_token(raw_token)
+        now = utcnow()
+        expires_at = (dt.datetime.fromisoformat(now) + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
+        reset_id = f"reset_{secrets.token_hex(10)}"
         try:
-            conn = get_conn()
-            profile = conn.execute(
-                "SELECT id FROM profiles WHERE email=? AND COALESCE(verified, 0)=1",
-                (email,),
-            ).fetchone()
-            if profile:
-                raw_token = secrets.token_urlsafe(32)
-                token_hash = hash_token(raw_token)
-                now = utcnow()
-                expires_at = (dt.datetime.fromisoformat(now) + dt.timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)).isoformat()
-                reset_id = f"reset_{secrets.token_hex(10)}"
-                conn.execute(
-                    "INSERT INTO password_resets (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
-                    (reset_id, profile["id"], token_hash, expires_at, now),
-                )
-                conn.commit()
-                email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
-                if resend_enabled() and not email_sent:
-                    safe_log_activity(
-                        profile["id"],
-                        "password_reset_email_failed",
-                        {"email": email, "diagnostics": diagnostics},
-                    )
-        except Exception:
-            if conn is not None:
-                conn.rollback()
-            LOGGER.exception("Password reset request failed")
-        finally:
-            if conn is not None:
-                conn.close()
+            conn.execute(
+                "INSERT INTO password_resets (id, profile_id, token_hash, expires_at, used_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
+                (reset_id, profile["id"], token_hash, expires_at, now),
+            )
+            conn.commit()
+            LOGGER.info(
+                "Forgot password token result: email_domain=%s account_found=true profile_verified=true reset_token_created=true",
+                email_domain or "unknown",
+            )
+        except Exception as db_exc:
+            conn.rollback()
+            LOGGER.info(
+                "Forgot password token result: email_domain=%s account_found=true profile_verified=true reset_token_created=false db_error_type=%s db_error=%s",
+                email_domain or "unknown",
+                type(db_exc).__name__,
+                str(db_exc)[:MAX_DIAGNOSTIC_MESSAGE_LENGTH],
+            )
+            return {
+                "ok": True,
+                "message": "If an account exists for this email, password reset instructions have been sent.",
+            }
+
+        email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
+        if email_sent:
+            LOGGER.info(
+                "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=true",
+                email_domain or "unknown",
+            )
+        else:
+            diagnostics_dict = diagnostics if isinstance(diagnostics, dict) else {}
+            raw_provider_status = diagnostics_dict.get("status_code")
+            if isinstance(raw_provider_status, int):
+                if 100 <= raw_provider_status < 200:
+                    safe_provider_status = "1xx"
+                elif 200 <= raw_provider_status < 300:
+                    safe_provider_status = "2xx"
+                elif 300 <= raw_provider_status < 400:
+                    safe_provider_status = "3xx"
+                elif 400 <= raw_provider_status < 500:
+                    safe_provider_status = "4xx"
+                elif 500 <= raw_provider_status < 600:
+                    safe_provider_status = "5xx"
+                else:
+                    safe_provider_status = "other"
+            else:
+                safe_provider_status = "unknown"
+
+            normalized_error = str(diagnostics_dict.get("error", "")).strip().lower()
+            safe_provider_error = {
+                "request_error": "request_error",
+                "http_error": "http_error",
+                "service_unavailable": "service_unavailable",
+                "unauthorized": "unauthorized",
+                "invalid_request": "invalid_request",
+            }.get(normalized_error, "other")
+            LOGGER.info(
+                "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=false provider_status=%s provider_error=%s",
+                email_domain or "unknown",
+                safe_provider_status,
+                safe_provider_error,
+            )
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        LOGGER.info(
+            "Forgot password request failed safely: email_domain=%s error_type=%s error=%s",
+            email_domain or "unknown",
+            type(exc).__name__,
+            str(exc)[:MAX_DIAGNOSTIC_MESSAGE_LENGTH],
+        )
+    finally:
+        if conn is not None:
+            conn.close()
     return {
         "ok": True,
         "message": "If an account exists for this email, password reset instructions have been sent.",
