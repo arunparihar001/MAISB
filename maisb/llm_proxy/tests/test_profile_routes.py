@@ -148,7 +148,7 @@ def test_forgot_password_and_reset_flow(monkeypatch, tmp_path):
     sent_messages = create_verified_account(monkeypatch, profile_routes, client, email, "s3cret-pass")
     initial_messages = len(sent_messages)
 
-    forgot_existing = client.post("/v1/profile/forgot-password", json={"email": email})
+    forgot_existing = client.post("/v1/profile/forgot-password", json={"email": f"  {email.upper()}  "})
     forgot_unknown = client.post("/v1/profile/forgot-password", json={"email": "unknown@example.com"})
 
     assert forgot_existing.status_code == 200
@@ -160,10 +160,11 @@ def test_forgot_password_and_reset_flow(monkeypatch, tmp_path):
     }
     assert len(sent_messages) == initial_messages + 1
 
+    assert sent_messages[-1][0] == email
     reset_subject = sent_messages[-1][1]
     reset_body = sent_messages[-1][2]
     assert reset_subject == "Reset your MAISB password"
-    assert "reset-password?token=" in reset_body
+    assert "https://app.maisb.app/reset-password?token=" in reset_body
     token_match = re.search(r"<pre>([^<]+)</pre>", reset_body)
     assert token_match is not None
     raw_token = token_match.group(1)
@@ -217,6 +218,51 @@ def test_forgot_password_and_reset_flow(monkeypatch, tmp_path):
     )
     assert scan_response.status_code == 200
     assert scan_response.json()["decision"] == "ALLOWED"
+
+
+def test_forgot_password_unverified_account_does_not_send_reset(monkeypatch, tmp_path):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    client = TestClient(scan_api.app)
+    email = "pending@example.com"
+    sent_messages = []
+
+    def fake_send_resend_email(to, subject, html_body):
+        sent_messages.append((to, subject, html_body))
+        return True, None
+
+    monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
+
+    signup_response = client.post(
+        "/v1/profile/signup",
+        json={
+            "name": "Pending User",
+            "email": email,
+            "company": "Analytical Engines",
+            "use_case": "Verify auth flow",
+            "password": "s3cret-pass",
+        },
+    )
+    assert signup_response.status_code == 200
+    assert len(sent_messages) == 1
+    assert sent_messages[-1][1] == "Verify your MAISB account"
+
+    forgot = client.post("/v1/profile/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    assert forgot.json() == {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+    assert len(sent_messages) == 1
+
+    with closing(profile_routes.get_conn()) as conn:
+        profile_id = conn.execute("SELECT id FROM profiles WHERE email=?", (email,)).fetchone()["id"]
+        reset_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM password_resets WHERE profile_id=?",
+            (profile_id,),
+        ).fetchone()["c"]
+    assert reset_count == 0
 
 
 def test_reset_password_validation_and_token_guards(monkeypatch, tmp_path):
