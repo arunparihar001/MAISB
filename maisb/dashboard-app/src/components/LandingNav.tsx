@@ -10,7 +10,7 @@ const NAV_LINKS: NavLink[] = [
   { label: 'Product', href: '#features' },
   { label: 'Developers', href: '#developers' },
   { label: 'Security', href: '#security' },
-  { label: 'Pricing', href: '#pricing' },
+  { label: 'Pricing', to: '/pricing' },
   { label: 'Docs', to: '/docs' },
 ]
 
