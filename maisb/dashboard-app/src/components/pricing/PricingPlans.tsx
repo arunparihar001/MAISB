@@ -112,7 +112,7 @@ export default function PricingPlans() {
           >
             {plan.badge && (
               <span className="pricing-plans__badge">
-                <span aria-hidden="true">★</span> {plan.badge}
+                <span aria-hidden="true">⭐</span> {plan.badge}
               </span>
             )}
             <p className="pricing-plans__name">{plan.name}</p>

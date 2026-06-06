@@ -24,21 +24,21 @@ export default function PricingComparison() {
         <p className="eyebrow">Compare plans</p>
         <h2>Feature comparison across tiers</h2>
       </header>
-      <div className="pricing-compare__wrap table-wrap">
+      <div className="pricing-compare__wrap table-wrap" role="region" aria-label="Pricing plan feature comparison">
         <table className="pricing-compare__table">
           <thead>
             <tr>
-              <th>Feature</th>
-              <th>Free</th>
-              <th>Pro</th>
-              <th>Certify</th>
-              <th>Enterprise</th>
+              <th scope="col">Feature</th>
+              <th scope="col">Free</th>
+              <th scope="col">Pro</th>
+              <th scope="col">Certify</th>
+              <th scope="col">Enterprise</th>
             </tr>
           </thead>
           <tbody>
             {ROWS.map((row) => (
               <tr key={row.feature}>
-                <td>{row.feature}</td>
+                <th scope="row">{row.feature}</th>
                 <td>{row.free}</td>
                 <td>{row.pro}</td>
                 <td>{row.certify}</td>

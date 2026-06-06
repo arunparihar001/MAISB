@@ -43,14 +43,22 @@ export default function PricingFaq() {
             <article key={faq.id} className={`pricing-faq__item${open ? ' pricing-faq__item--open' : ''}`}>
               <button
                 type="button"
+                id={`pricing-faq-${faq.id}`}
                 className="pricing-faq__question"
                 aria-expanded={open}
+                aria-controls={`pricing-faq-panel-${faq.id}`}
                 onClick={() => setOpenId(open ? null : faq.id)}
               >
                 <span>{faq.question}</span>
                 <span className="pricing-faq__icon" aria-hidden="true">{open ? '−' : '+'}</span>
               </button>
-              <div className="pricing-faq__collapse" aria-hidden={!open}>
+              <div
+                id={`pricing-faq-panel-${faq.id}`}
+                className="pricing-faq__collapse"
+                role="region"
+                aria-labelledby={`pricing-faq-${faq.id}`}
+                aria-hidden={!open}
+              >
                 <div className="pricing-faq__collapse-inner">
                   <p className="pricing-faq__answer muted">{faq.answer}</p>
                 </div>
