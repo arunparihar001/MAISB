@@ -8,7 +8,7 @@ export default function LandingFooter() {
           <p className="landing-footer__heading">Product</p>
           <ul className="landing-footer__links">
             <li><a href="#features">Features</a></li>
-            <li><a href="#pricing">Pricing</a></li>
+            <li><Link to="/pricing">Pricing</Link></li>
             <li><Link to="/docs">Documentation</Link></li>
           </ul>
         </div>

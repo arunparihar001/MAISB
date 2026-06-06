@@ -1314,7 +1314,54 @@ input:focus, select:focus, textarea:focus {
 .landing-channel h3 { margin-bottom: 0.35rem; font-size: 0.95rem; }
 .landing-channel .muted { font-size: 0.84rem; line-height: 1.55; }
 
-/* ── Pricing preview ── */
+/* ── Homepage pricing teaser ── */
+.landing-pricing-teaser {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.35rem 1.5rem;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background:
+    linear-gradient(165deg, rgba(10, 14, 23, 0.92), rgba(7, 10, 16, 0.88));
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+  text-align: center;
+  transition: border-color 220ms ease, transform 220ms ease, box-shadow 220ms ease;
+}
+.landing-pricing-teaser:hover {
+  border-color: rgba(96, 165, 250, 0.22);
+  transform: translateY(-2px);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.3);
+}
+.landing-pricing-teaser__highlights {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.65rem;
+}
+.landing-pricing-teaser__highlights li {
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(6, 10, 16, 0.75);
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  font-weight: 550;
+  transition: border-color 200ms ease, background 200ms ease;
+}
+.landing-pricing-teaser:hover .landing-pricing-teaser__highlights li {
+  border-color: rgba(148, 163, 184, 0.16);
+}
+.landing-pricing-teaser__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: center;
+}
+
+/* ── Pricing preview (legacy cards — unused) ── */
 .landing-pricing {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -2298,7 +2345,9 @@ footer {
   .landing-workflow__card:hover,
   .landing-capability:hover,
   .landing-channel:hover,
-  .landing-pricing__card:hover,
+  .landing-pricing-teaser:hover {
+    transform: none;
+  }
   .landing-dev__block:hover,
   .landing-dashboard__panel:hover,
   .pricing-plans__card:hover,
