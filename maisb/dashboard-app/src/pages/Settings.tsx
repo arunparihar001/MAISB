@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import Badge from '../components/Badge'
 import Button from '../components/Button'
 import Card from '../components/Card'
@@ -161,9 +162,9 @@ export default function Settings() {
             <Card title="API access" subtitle="Programmatic workspace management">
               <p className="muted">Full API for automation. Create API keys, manage team, export reports, and more via our REST API.</p>
               <div style={{ marginTop: '1rem' }}>
-                <a href="https://docs.maisb.app/api" target="_blank" rel="noopener noreferrer">
+                <Link to="/docs/api">
                   <Button variant="secondary">View API docs</Button>
-                </a>
+                </Link>
               </div>
             </Card>
           </div>

@@ -290,9 +290,9 @@ export default function Signup() {
             <p className="muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>
               Contact us at <a href="mailto:support@maisb.app">support@maisb.app</a>
             </p>
-            <a href="https://docs.maisb.app" target="_blank" rel="noopener noreferrer">
+            <Link to="/docs">
               <Button variant="secondary">View documentation →</Button>
-            </a>
+            </Link>
           </Card>
         </div>
       </div>

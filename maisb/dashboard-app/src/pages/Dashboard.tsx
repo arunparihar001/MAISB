@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Badge from '../components/Badge'
 import Button from '../components/Button'
 import Card from '../components/Card'
@@ -80,9 +81,9 @@ export default function Dashboard() {
             </code>
           </div>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <a href="https://docs.maisb.app/api/scan" target="_blank" rel="noopener noreferrer">
+            <Link to="/docs/api">
               <Button variant="secondary">View API docs</Button>
-            </a>
+            </Link>
             <a href="/api-keys">
               <Button variant="secondary">View API keys</Button>
             </a>
