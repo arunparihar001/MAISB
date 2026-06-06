@@ -128,7 +128,7 @@ export default function Dashboard() {
             Every boundary decision is logged with timestamp, channel, risk score, and trace ID. Review blocked and flagged events to understand your security posture.
           </p>
           <div style={{ marginTop: '1rem' }}>
-            <a href="/security">
+            <a href="/security-events">
               <Button variant="secondary">View events →</Button>
             </a>
           </div>

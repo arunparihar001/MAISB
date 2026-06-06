@@ -6,7 +6,7 @@ const links = [
   { to: '/analytics', label: 'Analytics', icon: RadarIcon },
   { to: '/boundary-protection', label: 'Boundary Protection', icon: ShieldIcon },
   { to: '/traces', label: 'Trace', icon: TraceIcon },
-  { to: '/security', label: 'Security Events', icon: SparkIcon },
+  { to: '/security-events', label: 'Security Events', icon: SparkIcon },
   { to: '/api-keys', label: 'API Keys', icon: KeyIcon },
   { to: '/team', label: 'Team', icon: UsersIcon },
   { to: '/reports', label: 'Reports', icon: GridIcon },

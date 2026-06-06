@@ -9,12 +9,14 @@ export default function LandingFooter() {
           <ul className="landing-footer__links">
             <li><a href="#features">Features</a></li>
             <li><Link to="/pricing">Pricing</Link></li>
+            <li><Link to="/security">Security</Link></li>
             <li><Link to="/docs">Documentation</Link></li>
           </ul>
         </div>
         <div>
           <p className="landing-footer__heading">Developers</p>
           <ul className="landing-footer__links">
+            <li><Link to="/developers">Developers</Link></li>
             <li><Link to="/docs/api">API Reference</Link></li>
             <li><Link to="/docs/sdk">SDK Guides</Link></li>
             <li><Link to="/docs/examples">Code Examples</Link></li>

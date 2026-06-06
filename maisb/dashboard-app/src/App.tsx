@@ -16,7 +16,9 @@ import ForgotPassword from './pages/ForgotPassword'
 import Privacy from './pages/Privacy'
 import Refund from './pages/Refund'
 import Reports from './pages/Reports'
-import Security from './pages/Security'
+import SecurityEvents from './pages/Security'
+import Developers from './pages/Developers'
+import SecurityOverview from './pages/SecurityOverview'
 import SelectPlan from './pages/SelectPlan'
 import Settings from './pages/Settings'
 import Signup from './pages/Signup'
@@ -101,6 +103,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/pricing" element={<Pricing />} />
+      <Route path="/developers" element={<Developers />} />
+      <Route path="/security" element={<SecurityOverview />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/refund" element={<Refund />} />
@@ -129,7 +133,7 @@ export default function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/boundary-protection" element={<BoundaryProtection />} />
         <Route path="/traces" element={<Traces />} />
-        <Route path="/security" element={<Security />} />
+        <Route path="/security-events" element={<SecurityEvents />} />
         <Route path="/team" element={<Team />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />
