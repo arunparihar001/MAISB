@@ -120,6 +120,7 @@ def create_verified_account(monkeypatch, profile_routes, client, email, password
         return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
+    monkeypatch.setattr(profile_routes, "resend_enabled", lambda: True)
     signup_response = client.post(
         "/v1/profile/signup",
         json={
@@ -221,7 +222,7 @@ def test_forgot_password_and_reset_flow(monkeypatch, tmp_path):
     assert scan_response.json()["decision"] == "ALLOWED"
 
 
-def test_forgot_password_unverified_account_does_not_send_reset(monkeypatch, tmp_path):
+def test_forgot_password_unverified_account_sends_reset(monkeypatch, tmp_path):
     scan_api = setup_test_scan_app(monkeypatch, tmp_path)
     from api import profile_routes
 
@@ -234,6 +235,7 @@ def test_forgot_password_unverified_account_does_not_send_reset(monkeypatch, tmp
         return True, None
 
     monkeypatch.setattr(profile_routes, "send_resend_email", fake_send_resend_email)
+    monkeypatch.setattr(profile_routes, "resend_enabled", lambda: True)
 
     signup_response = client.post(
         "/v1/profile/signup",
@@ -255,7 +257,8 @@ def test_forgot_password_unverified_account_does_not_send_reset(monkeypatch, tmp
         "ok": True,
         "message": "If an account exists for this email, password reset instructions have been sent.",
     }
-    assert len(sent_messages) == 1
+    assert len(sent_messages) == 2
+    assert sent_messages[-1][1] == "Reset your MAISB password"
 
     with closing(profile_routes.get_conn()) as conn:
         profile_id = conn.execute("SELECT id FROM profiles WHERE email=?", (email,)).fetchone()["id"]
@@ -263,7 +266,7 @@ def test_forgot_password_unverified_account_does_not_send_reset(monkeypatch, tmp
             "SELECT COUNT(*) AS c FROM password_resets WHERE profile_id=?",
             (profile_id,),
         ).fetchone()["c"]
-    assert reset_count == 0
+    assert reset_count == 1
 
 
 def test_forgot_password_db_insert_failure_does_not_send_email(monkeypatch, tmp_path):
@@ -320,6 +323,33 @@ def test_forgot_password_db_insert_failure_does_not_send_email(monkeypatch, tmp_
     assert reset_count == 0
 
 
+def test_forgot_password_missing_resend_env_logs_safely(monkeypatch, tmp_path, caplog):
+    scan_api = setup_test_scan_app(monkeypatch, tmp_path)
+    from api import profile_routes
+
+    client = TestClient(scan_api.app)
+    email = "missing-resend@example.com"
+    create_verified_account(monkeypatch, profile_routes, client, email, "s3cret-pass")
+
+    monkeypatch.setattr(profile_routes, "resend_enabled", lambda: False)
+    monkeypatch.setattr(profile_routes, "missing_resend_env_vars", lambda: ["RESEND_API_KEY"])
+
+    caplog.set_level("WARNING", logger=profile_routes.LOGGER.name)
+    caplog.clear()
+
+    forgot = client.post("/v1/profile/forgot-password", json={"email": email})
+    assert forgot.status_code == 200
+    assert forgot.json() == {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+
+    combined_logs = "\n".join(caplog.messages)
+    assert "missing-resend@example.com" not in combined_logs
+    assert "reset_email_send_attempted=false" in combined_logs
+    assert "missing_env_vars=RESEND_API_KEY" in combined_logs
+
+
 def test_forgot_password_resend_failure_logs_safely(monkeypatch, tmp_path, caplog):
     scan_api = setup_test_scan_app(monkeypatch, tmp_path)
     from api import profile_routes
@@ -346,7 +376,8 @@ def test_forgot_password_resend_failure_logs_safely(monkeypatch, tmp_path, caplo
     combined_logs = "\n".join(caplog.messages)
     assert "safe-logs@example.com" not in combined_logs
     assert "email_domain=example.com" in combined_logs
-    assert "resend_attempted=true" in combined_logs
+    assert "Forgot password request received" in combined_logs
+    assert "reset_email_send_attempted=true" in combined_logs
     assert "resend_sent=false" in combined_logs
     assert "provider_status=5xx" in combined_logs
     assert "provider_error=service_unavailable" in combined_logs

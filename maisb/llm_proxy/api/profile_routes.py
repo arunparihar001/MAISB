@@ -110,6 +110,23 @@ def email_domain_for_logs(value: str) -> str:
     return normalized.split("@", 1)[1]
 
 
+def masked_email_for_logs(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if "@" not in normalized:
+        return ""
+    local, domain = normalized.split("@", 1)
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***@{domain}"
+
+
+def email_hash_for_logs(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
 def is_production_env() -> bool:
     checks = [
         os.environ.get("APP_ENV", ""),
@@ -411,6 +428,17 @@ init_profile_db()
 
 def resend_enabled() -> bool:
     return bool(RESEND_API_KEY and _resend_from_address())
+
+
+def missing_resend_env_vars() -> List[str]:
+    missing: List[str] = []
+    if not RESEND_API_KEY:
+        missing.append("RESEND_API_KEY")
+    if not (RESEND_FROM or os.environ.get("RESEND_FROM_EMAIL", "")).strip():
+        missing.append("RESEND_FROM")
+    elif not _resend_from_address():
+        missing.append("RESEND_FROM")
+    return missing
 
 
 def _resend_from_address() -> str:
@@ -1129,15 +1157,26 @@ def profile_verify_email(body: VerifyEmailRequest) -> Dict[str, Any]:
 def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
     email = body.email.strip().lower()
     email_domain = email_domain_for_logs(email)
+    email_masked = masked_email_for_logs(email)
+    email_hash = email_hash_for_logs(email)
+    generic_response = {
+        "ok": True,
+        "message": "If an account exists for this email, password reset instructions have been sent.",
+    }
+
+    LOGGER.info(
+        "Forgot password request received: email_domain=%s email_masked=%s email_hash=%s",
+        email_domain or "unknown",
+        email_masked or "unknown",
+        email_hash or "unknown",
+    )
+
     if not is_valid_email(email):
         LOGGER.info(
-            "Forgot password ignored: email_domain=%s invalid_email=true",
+            "Forgot password result: email_domain=%s account_exists=false invalid_email=true reset_token_created=false reset_email_send_attempted=false",
             email_domain or "unknown",
         )
-        return {
-            "ok": True,
-            "message": "If an account exists for this email, password reset instructions have been sent.",
-        }
+        return generic_response
 
     conn: Optional[sqlite3.Connection] = None
     try:
@@ -1149,24 +1188,17 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
 
         if not profile:
             LOGGER.info(
-                "Forgot password lookup result: email_domain=%s account_found=false",
+                "Forgot password result: email_domain=%s account_exists=false reset_token_created=false reset_email_send_attempted=false",
                 email_domain or "unknown",
             )
-            return {
-                "ok": True,
-                "message": "If an account exists for this email, password reset instructions have been sent.",
-            }
+            return generic_response
 
         profile_verified = bool(profile["verified"])
-        if not profile_verified:
-            LOGGER.info(
-                "Forgot password lookup result: email_domain=%s account_found=true profile_verified=false",
-                email_domain or "unknown",
-            )
-            return {
-                "ok": True,
-                "message": "If an account exists for this email, password reset instructions have been sent.",
-            }
+        LOGGER.info(
+            "Forgot password lookup result: email_domain=%s account_exists=true profile_verified=%s",
+            email_domain or "unknown",
+            profile_verified,
+        )
 
         raw_token = secrets.token_urlsafe(32)
         token_hash = hash_token(raw_token)
@@ -1180,26 +1212,32 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
             )
             conn.commit()
             LOGGER.info(
-                "Forgot password token result: email_domain=%s account_found=true profile_verified=true reset_token_created=true",
+                "Forgot password token result: email_domain=%s account_exists=true reset_token_created=true",
                 email_domain or "unknown",
             )
         except Exception as db_exc:
             conn.rollback()
             LOGGER.info(
-                "Forgot password token result: email_domain=%s account_found=true profile_verified=true reset_token_created=false db_error_type=%s db_error=%s",
+                "Forgot password token result: email_domain=%s account_exists=true reset_token_created=false db_error_type=%s db_error=%s reset_email_send_attempted=false",
                 email_domain or "unknown",
                 type(db_exc).__name__,
                 str(db_exc)[:MAX_DIAGNOSTIC_MESSAGE_LENGTH],
             )
-            return {
-                "ok": True,
-                "message": "If an account exists for this email, password reset instructions have been sent.",
-            }
+            return generic_response
+
+        if not resend_enabled():
+            missing_env = missing_resend_env_vars()
+            LOGGER.warning(
+                "Forgot password resend skipped: email_domain=%s account_exists=true reset_token_created=true reset_email_send_attempted=false missing_env_vars=%s",
+                email_domain or "unknown",
+                ",".join(missing_env) if missing_env else "unknown",
+            )
+            return generic_response
 
         email_sent, diagnostics = send_password_reset_email(email, raw_token, expires_at)
         if email_sent:
             LOGGER.info(
-                "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=true",
+                "Forgot password resend result: email_domain=%s reset_email_send_attempted=true resend_sent=true",
                 email_domain or "unknown",
             )
         else:
@@ -1230,7 +1268,7 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
                 "invalid_request": "invalid_request",
             }.get(normalized_error, "other")
             LOGGER.info(
-                "Forgot password resend result: email_domain=%s resend_attempted=true resend_sent=false provider_status=%s provider_error=%s",
+                "Forgot password resend result: email_domain=%s reset_email_send_attempted=true resend_sent=false provider_status=%s provider_error=%s",
                 email_domain or "unknown",
                 safe_provider_status,
                 safe_provider_error,
@@ -1247,10 +1285,7 @@ def profile_forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
     finally:
         if conn is not None:
             conn.close()
-    return {
-        "ok": True,
-        "message": "If an account exists for this email, password reset instructions have been sent.",
-    }
+    return generic_response
 
 
 @router.post("/v1/profile/reset-password")
